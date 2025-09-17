@@ -1,0 +1,241 @@
+package executor
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"sync"
+	"time"
+
+	"xxljob-go-executor/config"
+	"xxljob-go-executor/logger"
+	"xxljob-go-executor/models"
+)
+
+type Executor struct {
+	config      *config.Config
+	handlers    map[string]models.JobHandler
+	runningJobs map[int]context.CancelFunc
+	mutex       sync.RWMutex
+}
+
+func NewExecutor(cfg *config.Config) *Executor {
+	return &Executor{
+		config:      cfg,
+		handlers:    make(map[string]models.JobHandler),
+		runningJobs: make(map[int]context.CancelFunc),
+	}
+}
+
+// RegisterJobHandler registers a job handler
+func (e *Executor) RegisterJobHandler(name string, handler models.JobHandler) {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+	e.handlers[name] = handler
+	logger.Info("Registered job handler: %s", name)
+}
+
+// Start starts the executor
+func (e *Executor) Start() error {
+	// Start registry with XXL-JOB admin
+	go e.startRegistry()
+
+	// Start heartbeat
+	go e.startHeartbeat()
+
+	logger.Info("Executor started successfully")
+	return nil
+}
+
+// Registry with XXL-JOB admin
+func (e *Executor) startRegistry() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	// Register immediately
+	e.registry()
+
+	for {
+		select {
+		case <-ticker.C:
+			e.registry()
+		}
+	}
+}
+
+func (e *Executor) registry() {
+	registryParam := models.RegistryParam{
+		RegistryGroup: "EXECUTOR",
+		RegistryKey:   e.config.XXLJob.AppName,
+		RegistryValue: fmt.Sprintf("http://%s:%d", e.config.Executor.IP, e.config.Executor.Port),
+	}
+
+	for _, adminAddr := range e.config.XXLJob.AdminAddresses {
+		url := fmt.Sprintf("%s/api/registry", adminAddr)
+		if err := e.postToAdmin(url, registryParam); err != nil {
+			logger.Error("Failed to registry to admin %s: %v", adminAddr, err)
+		} else {
+			logger.Debug("Successfully registered to admin: %s", adminAddr)
+		}
+	}
+}
+
+// Heartbeat to XXL-JOB admin
+func (e *Executor) startHeartbeat() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			e.heartbeat()
+		}
+	}
+}
+
+func (e *Executor) heartbeat() {
+	registryParam := models.RegistryParam{
+		RegistryGroup: "EXECUTOR",
+		RegistryKey:   e.config.XXLJob.AppName,
+		RegistryValue: fmt.Sprintf("http://%s:%d", e.config.Executor.IP, e.config.Executor.Port),
+	}
+
+	for _, adminAddr := range e.config.XXLJob.AdminAddresses {
+		url := fmt.Sprintf("%s/api/registryRemove", adminAddr)
+		if err := e.postToAdmin(url, registryParam); err != nil {
+			logger.Error("Failed to send heartbeat to admin %s: %v", adminAddr, err)
+		}
+	}
+}
+
+// Execute job
+func (e *Executor) ExecuteJob(param *models.TriggerParam) *models.ReturnT {
+	e.mutex.RLock()
+	handler, exists := e.handlers[param.ExecutorHandler]
+	e.mutex.RUnlock()
+
+	if !exists {
+		return &models.ReturnT{
+			Code: 500,
+			Msg:  fmt.Sprintf("Job handler not found: %s", param.ExecutorHandler),
+		}
+	}
+
+	// Create job context
+	jobCtx := &models.JobContext{
+		JobID:          param.JobID,
+		JobParam:       param.ExecutorParams,
+		LogID:          param.LogID,
+		LogDateTime:    time.Unix(param.LogDateTime/1000, 0),
+		BroadcastIndex: param.BroadcastIndex,
+		BroadcastTotal: param.BroadcastTotal,
+	}
+
+	// Execute job in goroutine
+	go func() {
+		jobLogger := logger.JobLogger(param.LogID, jobCtx.LogDateTime)
+		if jobLogger == nil {
+			logger.Error("Failed to create job logger for job %d", param.JobID)
+			return
+		}
+
+		jobLogger.JobInfo("Job started: %s, params: %s", param.ExecutorHandler, param.ExecutorParams)
+
+		if err := handler.Execute(jobCtx); err != nil {
+			jobLogger.JobError("Job failed: %v", err)
+			logger.Error("Job %d execution failed: %v", param.JobID, err)
+		} else {
+			jobLogger.JobInfo("Job completed successfully")
+			logger.Info("Job %d completed successfully", param.JobID)
+		}
+	}()
+
+	return &models.ReturnT{
+		Code: 200,
+		Msg:  "success",
+	}
+}
+
+// IdleBeat checks if executor is idle
+func (e *Executor) IdleBeat(param *models.IdleBeatParam) *models.ReturnT {
+	e.mutex.RLock()
+	_, running := e.runningJobs[param.JobID]
+	e.mutex.RUnlock()
+
+	if running {
+		return &models.ReturnT{
+			Code: 500,
+			Msg:  "job is running",
+		}
+	}
+
+	return &models.ReturnT{
+		Code: 200,
+		Msg:  "success",
+	}
+}
+
+// Kill job
+func (e *Executor) Kill(param *models.KillParam) *models.ReturnT {
+	e.mutex.Lock()
+	cancelFunc, exists := e.runningJobs[param.JobID]
+	if exists {
+		cancelFunc()
+		delete(e.runningJobs, param.JobID)
+	}
+	e.mutex.Unlock()
+
+	return &models.ReturnT{
+		Code: 200,
+		Msg:  "success",
+	}
+}
+
+// Log query
+func (e *Executor) Log(param *models.LogParam) *models.ReturnT {
+	// TODO: Implement log reading logic
+	result := &models.LogResult{
+		FromLineNum: param.FromLineNum,
+		ToLineNum:   param.FromLineNum,
+		LogContent:  "",
+		IsEnd:       true,
+	}
+
+	return &models.ReturnT{
+		Code:    200,
+		Msg:     "success",
+		Content: result,
+	}
+}
+
+func (e *Executor) postToAdmin(url string, data interface{}) error {
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if e.config.XXLJob.AccessToken != "" {
+		req.Header.Set("XXL-JOB-ACCESS-TOKEN", e.config.XXLJob.AccessToken)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("admin returned status: %d", resp.StatusCode)
+	}
+
+	return nil
+}
