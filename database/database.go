@@ -147,6 +147,7 @@ func (d *Database) CreateOrUpdateServer(serverID, serverName, ip string, port in
 		Port:          port,
 		Status:        ServerStatusOnline,
 		LastHeartbeat: time.Now(),
+		CreatedAt:     time.Now(),
 	}
 
 	return d.defaultDB.Save(&server).Error
