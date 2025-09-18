@@ -1,5 +1,4 @@
 package migration
-package migration
 
 import (
 	"context"
@@ -24,13 +23,13 @@ type MigrationTool struct {
 
 // MigrationStats 迁移统计信息
 type MigrationStats struct {
-	TotalTasks     int       `json:"total_tasks"`
-	MigratedTasks  int       `json:"migrated_tasks"`
-	FailedTasks    int       `json:"failed_tasks"`
-	SkippedTasks   int       `json:"skipped_tasks"`
-	StartTime      time.Time `json:"start_time"`
-	EndTime        time.Time `json:"end_time"`
-	Duration       string    `json:"duration"`
+	TotalTasks         int              `json:"total_tasks"`
+	MigratedTasks      int              `json:"migrated_tasks"`
+	FailedTasks        int              `json:"failed_tasks"`
+	SkippedTasks       int              `json:"skipped_tasks"`
+	StartTime          time.Time        `json:"start_time"`
+	EndTime            time.Time        `json:"end_time"`
+	Duration           string           `json:"duration"`
 	FailedTasksDetails []MigrationError `json:"failed_tasks_details,omitempty"`
 }
 
@@ -283,9 +282,9 @@ func (mt *MigrationTool) ValidateMigration() (*MigrationValidationReport, error)
 		})
 	} else {
 		report.Checks = append(report.Checks, ValidationCheck{
-			Name:   "pending_tasks_count",
-			Status: "success",
-			Count:  pendingCount,
+			Name:    "pending_tasks_count",
+			Status:  "success",
+			Count:   pendingCount,
 			Message: fmt.Sprintf("待迁移任务数量: %d", pendingCount),
 		})
 	}
