@@ -40,6 +40,18 @@ type Config struct {
 		Enable             bool `yaml:"enable"`
 		ConfigSyncInterval int  `yaml:"config_sync_interval"`
 	} `yaml:"queue"`
+
+	Redis struct {
+		Addr     string `yaml:"addr"`
+		Password string `yaml:"password"`
+		DB       int    `yaml:"db"`
+	} `yaml:"redis"`
+
+	Asynq struct {
+		Enable      bool           `yaml:"enable"`
+		Concurrency int            `yaml:"concurrency"`
+		Queues      map[string]int `yaml:"queues"`
+	} `yaml:"asynq"`
 }
 
 // LoadConfig loads configuration from file

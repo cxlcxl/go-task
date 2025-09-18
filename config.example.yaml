@@ -28,5 +28,18 @@ database:
     database: xxljob_executor
     charset: utf8mb4
 queue:
-  enable: true
+  enable: false  # 原有队列系统已被Asynq完全替换
   config_sync_interval: 10
+
+redis:
+  addr: localhost:6379
+  password: ""
+  db: 0
+
+asynq:
+  enable: true  # 默认启用Asynq
+  concurrency: 20
+  queues:
+    critical: 6
+    default: 3
+    low: 1

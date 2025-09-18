@@ -104,7 +104,7 @@ func (d *Database) ParseTableName(tableName string) (string, string, error) {
 
 // AutoMigrate 自动迁移表结构（只在默认数据库中创建系统表）
 func (d *Database) AutoMigrate() error {
-	return d.defaultDB.AutoMigrate(&QueueConfig{}, &ServerInfo{})
+	return d.defaultDB.AutoMigrate(&QueueConfig{}, &ServerInfo{}, &TaskHandlerRegistry{})
 }
 
 // GetQueueConfigs 获取队列配置
@@ -334,4 +334,57 @@ func (d *Database) IncrementRetryCount(tableName string, taskID int64) error {
 
 	query := fmt.Sprintf("UPDATE %s SET retry_count = retry_count + 1, updated_at = ? WHERE id = ?", realTableName)
 	return db.Exec(query, time.Now(), taskID).Error
+}
+
+// GetTaskHandlers 获取所有启用的任务处理器
+func (d *Database) GetTaskHandlers() ([]TaskHandlerRegistry, error) {
+	var handlers []TaskHandlerRegistry
+	result := d.defaultDB.Where("status = ?", HandlerStatusEnabled).Find(&handlers)
+	return handlers, result.Error
+}
+
+// GetTaskHandlerByType 根据任务类型获取处理器
+func (d *Database) GetTaskHandlerByType(taskType string) (*TaskHandlerRegistry, error) {
+	var handler TaskHandlerRegistry
+	result := d.defaultDB.Where("task_type = ? AND status = ?", taskType, HandlerStatusEnabled).First(&handler)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return &handler, nil
+}
+
+// RegisterTaskHandler 注册任务处理器
+func (d *Database) RegisterTaskHandler(handler *TaskHandlerRegistry) error {
+	// 检查是否已存在相同类型的处理器
+	var existing TaskHandlerRegistry
+	result := d.defaultDB.Where("task_type = ?", handler.TaskType).First(&existing)
+
+	if result.Error == nil {
+		// 已存在，更新
+		handler.ID = existing.ID
+		handler.UpdatedAt = time.Now()
+		return d.defaultDB.Save(handler).Error
+	} else {
+		// 不存在，创建新的
+		handler.CreatedAt = time.Now()
+		handler.UpdatedAt = time.Now()
+		handler.LastHeartbeat = time.Now()
+		return d.defaultDB.Create(handler).Error
+	}
+}
+
+// UpdateHandlerHeartbeat 更新处理器心跳
+func (d *Database) UpdateHandlerHeartbeat(taskType string) error {
+	now := time.Now()
+	return d.defaultDB.Model(&TaskHandlerRegistry{}).Where("task_type = ?", taskType).Update("last_heartbeat", now).Error
+}
+
+// DeleteTaskHandler 删除任务处理器
+func (d *Database) DeleteTaskHandler(taskType string) error {
+	return d.defaultDB.Where("task_type = ?", taskType).Delete(&TaskHandlerRegistry{}).Error
+}
+
+// DisableTaskHandler 禁用任务处理器
+func (d *Database) DisableTaskHandler(taskType string) error {
+	return d.defaultDB.Model(&TaskHandlerRegistry{}).Where("task_type = ?", taskType).Update("status", HandlerStatusDisabled).Error
 }

@@ -39,23 +39,68 @@ func (e *Executor) RegisterJobHandler(name string, handler models.JobHandler) {
 
 // Start starts the executor
 func (e *Executor) Start() error {
-	// Start registry with XXL-JOB admin
-	go e.startRegistry()
+	// Start XXL-JOB registration in background (non-blocking)
+	go e.startRegistryWithRetryLimit()
 
-	// Start heartbeat
-	go e.startHeartbeat()
+	// Start heartbeat in background (non-blocking)
+	go e.startHeartbeatWithRetryLimit()
 
 	logger.Info("Executor started successfully")
 	return nil
 }
 
-// Registry with XXL-JOB admin
-func (e *Executor) startRegistry() {
+// Registry with XXL-JOB admin with retry limit
+func (e *Executor) startRegistryWithRetryLimit() {
+	maxRetries := 3
+	retryInterval := 3 * time.Second
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		logger.Info("尝试注册到XXL-JOB管理台 (第%d/%d次)", attempt, maxRetries)
+
+		if e.registryWithResult() {
+			logger.Info("成功注册到XXL-JOB管理台")
+			// 注册成功后开始定期注册
+			e.startPeriodicRegistry()
+			return
+		}
+
+		// 如果不是最后一次尝试，等待后重试
+		if attempt < maxRetries {
+			logger.Info("注册失败，%v后重试", retryInterval)
+			time.Sleep(retryInterval)
+		}
+	}
+
+	logger.Error("XXL-JOB注册失败，已尝试%d次，跳过注册继续运行", maxRetries)
+}
+
+// Registry with result checking
+func (e *Executor) registryWithResult() bool {
+	registryParam := models.RegistryParam{
+		RegistryGroup: "EXECUTOR",
+		RegistryKey:   e.config.XXLJob.AppName,
+		RegistryValue: fmt.Sprintf("http://%s:%d", e.config.Executor.IP, e.config.Executor.Port),
+	}
+
+	successCount := 0
+	for _, adminAddr := range e.config.XXLJob.AdminAddresses {
+		url := fmt.Sprintf("%s/api/registry", adminAddr)
+		if err := e.postToAdmin(url, registryParam); err != nil {
+			logger.Error("Failed to registry to admin %s: %v", adminAddr, err)
+		} else {
+			logger.Debug("Successfully registered to admin: %s", adminAddr)
+			successCount++
+		}
+	}
+
+	// Return true if at least one admin registration succeeded
+	return successCount > 0
+}
+
+// Start periodic registry after successful initial registration
+func (e *Executor) startPeriodicRegistry() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-
-	// Register immediately
-	e.registry()
 
 	for {
 		select {
@@ -82,8 +127,58 @@ func (e *Executor) registry() {
 	}
 }
 
-// Heartbeat to XXL-JOB admin
-func (e *Executor) startHeartbeat() {
+// Heartbeat to XXL-JOB admin with retry limit
+func (e *Executor) startHeartbeatWithRetryLimit() {
+	// Wait for initial registration to complete
+	time.Sleep(8 * time.Second)
+
+	maxRetries := 3
+	retryInterval := 5 * time.Second
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		logger.Debug("尝试发送心跳到XXL-JOB管理台 (第%d/%d次)", attempt, maxRetries)
+
+		if e.heartbeatWithResult() {
+			logger.Debug("心跳成功，开始定期心跳")
+			// 心跳成功后开始定期心跳
+			e.startPeriodicHeartbeat()
+			return
+		}
+
+		// 如果不是最后一次尝试，等待后重试
+		if attempt < maxRetries {
+			logger.Debug("心跳失败，%v后重试", retryInterval)
+			time.Sleep(retryInterval)
+		}
+	}
+
+	logger.Error("XXL-JOB心跳失败，已尝试%d次，跳过心跳继续运行", maxRetries)
+}
+
+// Heartbeat with result checking
+func (e *Executor) heartbeatWithResult() bool {
+	registryParam := models.RegistryParam{
+		RegistryGroup: "EXECUTOR",
+		RegistryKey:   e.config.XXLJob.AppName,
+		RegistryValue: fmt.Sprintf("http://%s:%d", e.config.Executor.IP, e.config.Executor.Port),
+	}
+
+	successCount := 0
+	for _, adminAddr := range e.config.XXLJob.AdminAddresses {
+		url := fmt.Sprintf("%s/api/registryRemove", adminAddr)
+		if err := e.postToAdmin(url, registryParam); err != nil {
+			logger.Debug("Heartbeat failed to admin %s: %v", adminAddr, err)
+		} else {
+			successCount++
+		}
+	}
+
+	// Return true if at least one admin heartbeat succeeded
+	return successCount > 0
+}
+
+// Start periodic heartbeat after successful initial heartbeat
+func (e *Executor) startPeriodicHeartbeat() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 

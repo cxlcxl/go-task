@@ -9,13 +9,13 @@ import (
 	"syscall"
 
 	"xxljob-go-executor/admin"
+	"xxljob-go-executor/asynq"
 	"xxljob-go-executor/config"
 	"xxljob-go-executor/database"
 	"xxljob-go-executor/executor"
 	"xxljob-go-executor/handlers"
 	"xxljob-go-executor/jobs"
 	"xxljob-go-executor/logger"
-	"xxljob-go-executor/queue"
 )
 
 func main() {
@@ -37,9 +37,9 @@ func main() {
 
 	// 初始化数据库连接
 	var db *database.Database
-	var queueManager *queue.QueueManager
+	var asynqManager *asynq.AsynqManager
 
-	if cfg.Queue.Enable {
+	if cfg.Asynq.Enable {
 		// 创建多数据库连接配置
 		dbConfigs := make(map[string]database.Config)
 		for name, dbCfg := range cfg.Database {
@@ -59,24 +59,33 @@ func main() {
 			os.Exit(1)
 		}
 
-		// 自动迁移数据库表
-		// if err := db.AutoMigrate(); err != nil {
-		// 	logger.Error("数据库表迁移失败: %v", err)
-		// 	os.Exit(1)
-		// }
-
-		// 创建队列管理器
-		queueManager = queue.NewQueueManager(db, cfg.Executor.ServerID)
-
-		// 注册队列任务处理器
-		registerQueueTaskHandlers(queueManager)
-
-		// 启动队列管理器
-		if err := queueManager.Start(); err != nil {
-			logger.Error("启动队列管理器失败: %v", err)
+		// 创建基于Asynq的队列管理器（完全替换原有系统）
+		asynqManager, err = asynq.NewAsynqManager(cfg)
+		if err != nil {
+			logger.Error("初始化Asynq管理器失败: %v", err)
 			os.Exit(1)
 		}
-		logger.Info("队列管理器启动成功")
+
+		// 创建任务处理器
+		taskProcessor := asynq.NewTaskProcessor(asynqManager, db, cfg.Executor.ServerID)
+
+		// 启动Asynq系统
+		if err := asynqManager.Start(); err != nil {
+			logger.Error("启动Asynq管理器失败: %v", err)
+			os.Exit(1)
+		}
+
+		// 注册Asynq任务处理器
+		registerAsynqTaskHandlers(asynqManager)
+
+		// 启动任务迁移（处理数据库中的遗留任务）
+		go func() {
+			if err := taskProcessor.ProcessDatabaseTasks(); err != nil {
+				logger.Error("初始任务迁移失败: %v", err)
+			}
+		}()
+
+		logger.Info("Asynq队列系统启动成功")
 	}
 
 	// 创建XXL-JOB执行器
@@ -99,6 +108,12 @@ func main() {
 	if db != nil {
 		adminHandler := admin.NewAdminHandler(db)
 		setupAdminRoutes(adminHandler)
+
+		// 设置Asynq管理接口
+		if asynqManager != nil {
+			asynqAdminHandler := admin.NewAsynqAdminHandler(asynqManager)
+			setupAsynqAdminRoutes(asynqAdminHandler)
+		}
 	}
 
 	// 启动HTTP服务器
@@ -113,7 +128,7 @@ func main() {
 	}()
 
 	// 等待关闭信号
-	waitForShutdown(queueManager)
+	waitForShutdown(asynqManager)
 }
 
 func registerXXLJobHandlers(exec *executor.Executor) {
@@ -128,15 +143,15 @@ func registerXXLJobHandlers(exec *executor.Executor) {
 	logger.Info("所有XXL-JOB任务处理器注册成功")
 }
 
-func registerQueueTaskHandlers(queueManager *queue.QueueManager) {
-	// 注册队列任务处理器
-	queueManager.RegisterTaskHandler("email", jobs.NewEmailTaskHandler())
-	queueManager.RegisterTaskHandler("data_sync", jobs.NewDataSyncTaskHandler())
-	queueManager.RegisterTaskHandler("file_process", jobs.NewFileProcessTaskHandler())
-	queueManager.RegisterTaskHandler("report_generate", jobs.NewReportGenerateTaskHandler())
-	queueManager.RegisterTaskHandler("notification", jobs.NewNotificationTaskHandler())
+func registerAsynqTaskHandlers(asynqManager *asynq.AsynqManager) {
+	// 注册队列任务处理器到Asynq
+	asynqManager.RegisterTaskHandler("email", jobs.NewEmailTaskHandler())
+	asynqManager.RegisterTaskHandler("data_sync", jobs.NewDataSyncTaskHandler())
+	asynqManager.RegisterTaskHandler("file_process", jobs.NewFileProcessTaskHandler())
+	asynqManager.RegisterTaskHandler("report_generate", jobs.NewReportGenerateTaskHandler())
+	asynqManager.RegisterTaskHandler("notification", jobs.NewNotificationTaskHandler())
 
-	logger.Info("所有队列任务处理器注册成功")
+	logger.Info("所有Asynq任务处理器注册成功")
 }
 
 func setupHTTPRoutes(handler *handlers.HTTPHandler) {
@@ -168,19 +183,40 @@ func setupAdminRoutes(handler *admin.AdminHandler) {
 	// 任务管理接口
 	http.HandleFunc("/admin/task/create", handler.CreateTask)
 
+	// 处理器管理接口
+	http.HandleFunc("/admin/handler/register", handler.RegisterHandler)
+	http.HandleFunc("/admin/handler/list", handler.ListHandlers)
+	http.HandleFunc("/admin/handler/get", handler.GetHandler)
+	http.HandleFunc("/admin/handler/update", handler.UpdateHandler)
+	http.HandleFunc("/admin/handler/delete", handler.DeleteHandler)
+	http.HandleFunc("/admin/handler/heartbeat", handler.HeartbeatHandler)
+
 	logger.Info("管理接口路由配置完成")
 }
 
-func waitForShutdown(queueManager *queue.QueueManager) {
+func setupAsynqAdminRoutes(handler *admin.AsynqAdminHandler) {
+	// Asynq管理接口
+	http.HandleFunc("/admin/asynq/stats", handler.GetAsynqStats)
+	http.HandleFunc("/admin/asynq/tasks", handler.ListAsynqTasks)
+	http.HandleFunc("/admin/asynq/cancel", handler.CancelAsynqTask)
+	http.HandleFunc("/admin/asynq/enqueue", handler.EnqueueTask)
+	http.HandleFunc("/admin/asynq/migrate", handler.TriggerMigration)
+	http.HandleFunc("/admin/asynq/dashboard", handler.GetQueueDashboard)
+	http.HandleFunc("/admin/asynq/ui", handler.GetAsynqWebUI)
+
+	logger.Info("Asynq管理接口路由配置完成")
+}
+
+func waitForShutdown(asynqManager *asynq.AsynqManager) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
 	logger.Info("正在关闭执行器...")
 
-	// 关闭队列管理器
-	if queueManager != nil {
-		queueManager.Stop()
+	// 关闭Asynq管理器（优雅关闭）
+	if asynqManager != nil {
+		asynqManager.Stop()
 	}
 
 	// TODO: 实现优雅关闭

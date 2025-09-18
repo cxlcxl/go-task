@@ -11,11 +11,15 @@ import (
 )
 
 type AdminHandler struct {
-	db *database.Database
+	db           *database.Database
+	handlerAdmin *HandlerAdminHandler
 }
 
 func NewAdminHandler(db *database.Database) *AdminHandler {
-	return &AdminHandler{db: db}
+	return &AdminHandler{
+		db:           db,
+		handlerAdmin: NewHandlerAdminHandler(db),
+	}
 }
 
 // QueueConfigRequest 队列配置请求结构
@@ -244,4 +248,36 @@ func (h *AdminHandler) writeError(w http.ResponseWriter, message string, statusC
 func (h *AdminHandler) writeJSON(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(data)
+}
+
+// Handler management delegation methods
+
+// RegisterHandler 注册处理器
+func (h *AdminHandler) RegisterHandler(w http.ResponseWriter, r *http.Request) {
+	h.handlerAdmin.RegisterHandler(w, r)
+}
+
+// ListHandlers 获取处理器列表
+func (h *AdminHandler) ListHandlers(w http.ResponseWriter, r *http.Request) {
+	h.handlerAdmin.ListHandlers(w, r)
+}
+
+// GetHandler 获取单个处理器信息
+func (h *AdminHandler) GetHandler(w http.ResponseWriter, r *http.Request) {
+	h.handlerAdmin.GetHandler(w, r)
+}
+
+// UpdateHandler 更新处理器信息
+func (h *AdminHandler) UpdateHandler(w http.ResponseWriter, r *http.Request) {
+	h.handlerAdmin.UpdateHandler(w, r)
+}
+
+// DeleteHandler 删除处理器
+func (h *AdminHandler) DeleteHandler(w http.ResponseWriter, r *http.Request) {
+	h.handlerAdmin.DeleteHandler(w, r)
+}
+
+// HeartbeatHandler 处理器心跳接口
+func (h *AdminHandler) HeartbeatHandler(w http.ResponseWriter, r *http.Request) {
+	h.handlerAdmin.HeartbeatHandler(w, r)
 }

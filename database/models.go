@@ -66,3 +66,34 @@ const (
 	ServerStatusOffline = 0 // 离线
 	ServerStatusOnline  = 1 // 在线
 )
+
+// TaskHandlerRegistry 任务处理器注册表
+type TaskHandlerRegistry struct {
+	ID            int       `json:"id" gorm:"primaryKey;autoIncrement"`
+	TaskType      string    `json:"task_type" gorm:"uniqueIndex;size:100;not null;comment:任务类型"`
+	HandlerName   string    `json:"handler_name" gorm:"size:100;not null;comment:处理器名称"`
+	EndpointURL   string    `json:"endpoint_url" gorm:"size:500;comment:处理器端点URL"`
+	HandlerType   string    `json:"handler_type" gorm:"size:20;default:'http';comment:处理器类型 http/grpc/local"`
+	Version       string    `json:"version" gorm:"size:20;comment:处理器版本"`
+	Status        int       `json:"status" gorm:"default:1;comment:状态 1:启用 0:禁用"`
+	Timeout       int       `json:"timeout" gorm:"default:30;comment:超时时间(秒)"`
+	RetryCount    int       `json:"retry_count" gorm:"default:3;comment:重试次数"`
+	Description   string    `json:"description" gorm:"size:500;comment:处理器描述"`
+	ConfigData    string    `json:"config_data" gorm:"type:text;comment:配置数据(JSON格式)"`
+	LastHeartbeat time.Time `json:"last_heartbeat" gorm:"comment:最后心跳时间"`
+	CreatedAt     time.Time `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt     time.Time `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+// HandlerStatus 处理器状态常量
+const (
+	HandlerStatusDisabled = 0 // 禁用
+	HandlerStatusEnabled  = 1 // 启用
+)
+
+// HandlerType 处理器类型常量
+const (
+	HandlerTypeHTTP  = "http"  // HTTP接口
+	HandlerTypeGRPC  = "grpc"  // gRPC接口
+	HandlerTypeLocal = "local" // 本地处理器
+)
