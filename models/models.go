@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"task-executor/database"
+	"time"
+)
 
 // TriggerParam represents the trigger parameters from XXL-JOB
 type TriggerParam struct {
@@ -73,3 +76,5 @@ type JobContext struct {
 type JobHandler interface {
 	Execute(ctx *JobContext) error
 }
+
+type QueueTaskHandler func(database.TaskData, database.QueueTable) func()

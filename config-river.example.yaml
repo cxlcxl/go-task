@@ -1,0 +1,49 @@
+# XXL-JOB Go执行器配置文件 (基于River队列系统)
+# 此配置用于连接XXL-JOB管理平台和PostgreSQL+River队列系统
+
+# HTTP服务器配置
+server:
+  host: "0.0.0.0"
+  port: 9999
+
+# XXL-JOB管理平台配置
+xxljob:
+  admin_addresses:
+    - "http://localhost:7890/xxl-job-admin"  # XXL-JOB管理平台地址
+  app_name: "xxl-job-executor-go"             # 执行器应用名称
+  access_token: ""                            # 通信令牌
+  log_path: "./logs"                          # 日志文件路径
+  log_retention_days: 30                      # 日志保留天数
+
+# 执行器配置
+executor:
+  ip: "192.168.1.100"       # 执行器IP地址（云服务器部署时必须配置外网IP）
+  port: 9999                # 执行器端口
+  server_id: "executor-01"  # 服务器唯一标识
+
+# PostgreSQL数据库配置
+postgresql:
+  host: "localhost"
+  port: 5432
+  username: "postgres"
+  password: "your_password"
+  database: "river_queue"
+  ssl_mode: "disable"       # SSL模式: disable, require, verify-ca, verify-full
+  max_conns: 100            # 最大连接数
+  min_conns: 10             # 最小连接数
+
+# River队列系统配置
+river:
+  enable: true                          # 是否启用River队列
+  workers: 50                           # 默认工作协程数（当数据库配置不可用时使用）
+  poll_only: false                      # 仅轮询模式（不处理任务）
+  insert_only: false                    # 仅插入模式（不启动worker）
+  rescue_stuck_jobs_after: "1h"         # 救援卡住的任务时间
+  max_attempts: 3                       # 默认最大重试次数
+
+  # 注意：队列配置现在主要从数据库的 queue_configs 表中读取
+  # 以下配置仅作为数据库不可用时的备用配置
+  queues:
+    default:
+      max_workers: 20
+      priority: 1

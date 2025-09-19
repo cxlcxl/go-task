@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"xxljob-go-executor/logger"
-	"xxljob-go-executor/models"
+	"task-executor/logger"
+	"task-executor/models"
 )
 
 // EmailTaskHandler 邮件发送任务处理器

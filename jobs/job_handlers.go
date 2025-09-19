@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"xxljob-go-executor/logger"
-	"xxljob-go-executor/models"
+	"task-executor/logger"
+	"task-executor/models"
 )
 
 // DemoJobHandler demonstrates a simple job implementation

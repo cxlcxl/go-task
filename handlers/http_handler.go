@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"xxljob-go-executor/executor"
-	"xxljob-go-executor/logger"
-	"xxljob-go-executor/models"
+	"task-executor/executor"
+	"task-executor/logger"
+	"task-executor/models"
 )
 
 type HTTPHandler struct {

@@ -1,0 +1,27 @@
+# Docker镜像
+*.tar
+*.tar.gz
+
+# 日志文件
+logs/
+*.log
+
+# 配置文件（排除Docker配置）
+config.yaml
+!config-docker.yaml
+
+# 编译产物
+executor
+main
+
+# IDE文件
+.vscode/
+.idea/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.temp

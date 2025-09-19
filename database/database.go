@@ -1,18 +1,21 @@
 package database
 
 import (
+	"context"
 	"fmt"
-	"strings"
 	"time"
 
-	"gorm.io/driver/mysql"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
 type Database struct {
-	connections map[string]*gorm.DB
-	defaultDB   *gorm.DB
+	db      *gorm.DB
+	pgxPool *pgxpool.Pool // 用于 River
+	ctx     context.Context
+	dbs     map[string]*gorm.DB
 }
 
 type Config struct {
@@ -21,114 +24,116 @@ type Config struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 	Database string `json:"database"`
-	Charset  string `json:"charset"`
+	SSLMode  string `json:"ssl_mode"`
+	MaxConns int    `json:"max_conns"`
+	MinConns int    `json:"min_conns"`
 }
 
-func NewDatabase(configs map[string]Config) (*Database, error) {
-	connections := make(map[string]*gorm.DB)
-	var defaultDB *gorm.DB
+func NewDatabase(config Config) (*Database, error) {
+	// 构建 PostgreSQL DSN
+	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=%s",
+		config.Host, config.Username, config.Password, config.Database, config.Port, config.SSLMode)
 
-	for name, config := range configs {
-		dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=True&loc=Local",
-			config.Username, config.Password, config.Host, config.Port, config.Database, config.Charset)
-
-		db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
-			Logger: logger.Default.LogMode(logger.Info),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("连接数据库 %s 失败: %w", name, err)
-		}
-
-		// 设置连接池
-		sqlDB, err := db.DB()
-		if err != nil {
-			return nil, err
-		}
-		sqlDB.SetMaxIdleConns(10)
-		sqlDB.SetMaxOpenConns(100)
-		sqlDB.SetConnMaxLifetime(time.Hour)
-
-		connections[name] = db
-
-		// 设置默认数据库（使用第一个或者名为"default"的）
-		if name == "default" || defaultDB == nil {
-			defaultDB = db
-		}
+	// 创建 GORM 连接
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Info),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("连接PostgreSQL数据库失败: %w", err)
 	}
 
-	if defaultDB == nil {
-		return nil, fmt.Errorf("没有找到默认数据库连接")
+	// 设置连接池
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, err
+	}
+
+	// 设置连接池参数
+	maxConns := config.MaxConns
+	if maxConns == 0 {
+		maxConns = 100
+	}
+	minConns := config.MinConns
+	if minConns == 0 {
+		minConns = 10
+	}
+
+	sqlDB.SetMaxIdleConns(minConns)
+	sqlDB.SetMaxOpenConns(maxConns)
+	sqlDB.SetConnMaxLifetime(time.Hour)
+
+	// 创建 pgx 连接池（为 River 使用）
+	pgxDSN := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+		config.Username, config.Password, config.Host, config.Port, config.Database, config.SSLMode)
+
+	pgxConfig, err := pgxpool.ParseConfig(pgxDSN)
+	if err != nil {
+		return nil, fmt.Errorf("解析pgx配置失败: %w", err)
+	}
+
+	// 设置 pgx 连接池参数
+	pgxConfig.MaxConns = int32(maxConns)
+	pgxConfig.MinConns = int32(minConns)
+	pgxConfig.MaxConnLifetime = time.Hour
+	pgxConfig.MaxConnIdleTime = 30 * time.Minute
+
+	ctx := context.Background()
+	pgxPool, err := pgxpool.NewWithConfig(ctx, pgxConfig)
+	if err != nil {
+		return nil, fmt.Errorf("创建pgx连接池失败: %w", err)
+	}
+
+	// 测试连接
+	if err := pgxPool.Ping(ctx); err != nil {
+		return nil, fmt.Errorf("数据库连接测试失败: %w", err)
 	}
 
 	return &Database{
-		connections: connections,
-		defaultDB:   defaultDB,
+		db:      db,
+		pgxPool: pgxPool,
+		ctx:     ctx,
 	}, nil
 }
 
 func (d *Database) GetDB() *gorm.DB {
-	return d.defaultDB
+	return d.db
 }
 
-// GetConnection 获取指定名称的数据库连接
-func (d *Database) GetConnection(name string) (*gorm.DB, error) {
-	if name == "" {
-		return d.defaultDB, nil
+func (d *Database) GetConnect(queueTable *QueueTable) (*gorm.DB, error) {
+	if db, exists := d.dbs[queueTable.ConnectName]; exists {
+		return db.Table(queueTable.TableName), nil
+	} else {
+		return nil, fmt.Errorf("数据库连接不存在: %s", queueTable.ConnectName)
 	}
-
-	db, exists := d.connections[name]
-	if !exists {
-		return nil, fmt.Errorf("数据库连接 %s 不存在", name)
-	}
-	return db, nil
 }
 
-// ParseTableName 解析表名，返回数据库名和表名
-func (d *Database) ParseTableName(tableName string) (string, string, error) {
-	parts := strings.SplitN(tableName, ".", 2)
-	if len(parts) == 1 {
-		// 没有指定数据库，使用默认数据库
-		return "", parts[0], nil
-	}
-
-	dbName := parts[0]
-	realTableName := parts[1]
-
-	// 检查数据库连接是否存在
-	if _, exists := d.connections[dbName]; !exists {
-		return "", "", fmt.Errorf("数据库连接 %s 不存在", dbName)
-	}
-
-	return dbName, realTableName, nil
+// GetPGXPool 获取 pgx 连接池（为 River 使用）
+func (d *Database) GetPGXPool() *pgxpool.Pool {
+	return d.pgxPool
 }
 
-// AutoMigrate 自动迁移表结构（只在默认数据库中创建系统表）
+// GetContext 获取上下文
+func (d *Database) GetContext() context.Context {
+	return d.ctx
+}
+
+// Close 关闭数据库连接
+func (d *Database) Close() error {
+	if d.pgxPool != nil {
+		d.pgxPool.Close()
+	}
+	return nil
+}
+
+// AutoMigrate 自动迁移表结构
 func (d *Database) AutoMigrate() error {
-	return d.defaultDB.AutoMigrate(&QueueConfig{}, &ServerInfo{}, &TaskHandlerRegistry{})
-}
-
-// GetQueueConfigs 获取队列配置
-func (d *Database) GetQueueConfigs(serverID string) ([]QueueConfig, error) {
-	var configs []QueueConfig
-	result := d.defaultDB.Where("status = ? AND (server_id = ? OR server_id = '')",
-		QueueStatusEnabled, serverID).Find(&configs)
-	return configs, result.Error
-}
-
-// GetQueueConfigByName 根据队列名获取配置
-func (d *Database) GetQueueConfigByName(queueName string) (*QueueConfig, error) {
-	var config QueueConfig
-	result := d.defaultDB.Where("queue_name = ? AND status = ?", queueName, QueueStatusEnabled).First(&config)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	return &config, nil
+	return d.db.AutoMigrate(&QueueConfig{}, &ServerInfo{}, &TaskHandlerRegistry{}, &JobMetadata{}, &JobStatistics{})
 }
 
 // UpdateServerHeartbeat 更新服务器心跳
 func (d *Database) UpdateServerHeartbeat(serverID string, serverName, ip string, port int) error {
 	now := time.Now()
-	return d.defaultDB.Model(&ServerInfo{}).Where("id = ?", serverID).Updates(map[string]interface{}{
+	return d.db.Model(&ServerInfo{}).Where("id = ?", serverID).Updates(map[string]interface{}{
 		"server_name":    serverName,
 		"ip":             ip,
 		"port":           port,
@@ -150,203 +155,20 @@ func (d *Database) CreateOrUpdateServer(serverID, serverName, ip string, port in
 		CreatedAt:     time.Now(),
 	}
 
-	return d.defaultDB.Save(&server).Error
-}
-
-// RecoverOrphanedTasks 恢复孤立的任务（启动时调用）
-func (d *Database) RecoverOrphanedTasks(serverID string) error {
-	// 获取所有队列配置
-	configs, err := d.GetQueueConfigs(serverID)
-	if err != nil {
-		return fmt.Errorf("获取队列配置失败: %w", err)
-	}
-
-	for _, config := range configs {
-		// 解析表名
-		dbName, realTableName, err := d.ParseTableName(config.TableName)
-		if err != nil {
-			continue // 跳过无效的表名
-		}
-
-		// 获取对应的数据库连接
-		db, err := d.GetConnection(dbName)
-		if err != nil {
-			continue // 跳过无效的数据库连接
-		}
-
-		// 恢复执行中的任务为待执行状态
-		updateQuery := fmt.Sprintf(`
-			UPDATE %s
-			SET status = ?, server_id = '', error_msg = ?, updated_at = ?
-			WHERE status = ? AND (server_id = ? OR server_id = '')
-		`, realTableName)
-
-		errorMsg := "任务因服务重启而重置"
-		result := db.Exec(updateQuery,
-			TaskStatusPending, errorMsg, time.Now(),
-			TaskStatusRunning, serverID)
-
-		if result.Error != nil {
-			return fmt.Errorf("恢复队列 %s 的孤立任务失败: %w", config.QueueName, result.Error)
-		}
-
-		if result.RowsAffected > 0 {
-			fmt.Printf("队列 %s 恢复了 %d 个孤立任务\n", config.QueueName, result.RowsAffected)
-		}
-	}
-
-	return nil
-}
-
-// RecoverTimeoutTasks 恢复超时的任务
-func (d *Database) RecoverTimeoutTasks(timeoutMinutes int) error {
-	// 获取所有队列配置
-	var configs []QueueConfig
-	result := d.defaultDB.Where("status = ?", QueueStatusEnabled).Find(&configs)
-	if result.Error != nil {
-		return result.Error
-	}
-
-	for _, config := range configs {
-		// 解析表名
-		dbName, realTableName, err := d.ParseTableName(config.TableName)
-		if err != nil {
-			continue
-		}
-
-		// 获取对应的数据库连接
-		db, err := d.GetConnection(dbName)
-		if err != nil {
-			continue
-		}
-
-		// 恢复执行时间超过指定分钟数的任务
-		updateQuery := fmt.Sprintf(`
-			UPDATE %s
-			SET status = ?, error_msg = ?, updated_at = ?
-			WHERE status = ? AND start_time < ?
-		`, realTableName)
-
-		timeoutTime := time.Now().Add(-time.Duration(timeoutMinutes) * time.Minute)
-		errorMsg := fmt.Sprintf("任务执行超时（超过%d分钟）", timeoutMinutes)
-
-		result := db.Exec(updateQuery,
-			TaskStatusFailed, errorMsg, time.Now(),
-			TaskStatusRunning, timeoutTime)
-
-		if result.Error != nil {
-			return fmt.Errorf("恢复队列 %s 的超时任务失败: %w", config.QueueName, result.Error)
-		}
-
-		if result.RowsAffected > 0 {
-			fmt.Printf("队列 %s 恢复了 %d 个超时任务\n", config.QueueName, result.RowsAffected)
-		}
-	}
-
-	return nil
-}
-
-// GetPendingTasks 获取待执行的任务
-func (d *Database) GetPendingTasks(tableName string, limit int) ([]map[string]interface{}, error) {
-	var tasks []map[string]interface{}
-
-	// 解析表名
-	dbName, realTableName, err := d.ParseTableName(tableName)
-	if err != nil {
-		return nil, err
-	}
-
-	// 获取对应的数据库连接
-	db, err := d.GetConnection(dbName)
-	if err != nil {
-		return nil, err
-	}
-
-	query := fmt.Sprintf(`
-		SELECT * FROM %s
-		WHERE status = ? AND schedule_time <= ?
-		ORDER BY schedule_time ASC
-		LIMIT ?
-	`, realTableName)
-
-	result := db.Raw(query, TaskStatusPending, time.Now(), limit).Scan(&tasks)
-	return tasks, result.Error
-}
-
-// UpdateTaskStatus 更新任务状态
-func (d *Database) UpdateTaskStatus(tableName string, taskID int64, status int, serverID string, errorMsg string) error {
-	// 解析表名
-	dbName, realTableName, err := d.ParseTableName(tableName)
-	if err != nil {
-		return err
-	}
-
-	// 获取对应的数据库连接
-	db, err := d.GetConnection(dbName)
-	if err != nil {
-		return err
-	}
-
-	updates := map[string]interface{}{
-		"status":     status,
-		"server_id":  serverID,
-		"updated_at": time.Now(),
-	}
-
-	if status == TaskStatusRunning {
-		updates["start_time"] = time.Now()
-	} else if status == TaskStatusCompleted || status == TaskStatusFailed {
-		updates["end_time"] = time.Now()
-	}
-
-	if errorMsg != "" {
-		updates["error_msg"] = errorMsg
-	}
-
-	query := fmt.Sprintf("UPDATE %s SET ", realTableName)
-	var setParts []string
-	var values []interface{}
-
-	for key, value := range updates {
-		setParts = append(setParts, fmt.Sprintf("%s = ?", key))
-		values = append(values, value)
-	}
-
-	query += strings.Join(setParts, ", ") + " WHERE id = ?"
-	values = append(values, taskID)
-
-	return db.Exec(query, values...).Error
-}
-
-// IncrementRetryCount 增加重试次数
-func (d *Database) IncrementRetryCount(tableName string, taskID int64) error {
-	// 解析表名
-	dbName, realTableName, err := d.ParseTableName(tableName)
-	if err != nil {
-		return err
-	}
-
-	// 获取对应的数据库连接
-	db, err := d.GetConnection(dbName)
-	if err != nil {
-		return err
-	}
-
-	query := fmt.Sprintf("UPDATE %s SET retry_count = retry_count + 1, updated_at = ? WHERE id = ?", realTableName)
-	return db.Exec(query, time.Now(), taskID).Error
+	return d.db.Save(&server).Error
 }
 
 // GetTaskHandlers 获取所有启用的任务处理器
 func (d *Database) GetTaskHandlers() ([]TaskHandlerRegistry, error) {
 	var handlers []TaskHandlerRegistry
-	result := d.defaultDB.Where("status = ?", HandlerStatusEnabled).Find(&handlers)
+	result := d.db.Where("status = ?", HandlerStatusEnabled).Find(&handlers)
 	return handlers, result.Error
 }
 
 // GetTaskHandlerByType 根据任务类型获取处理器
 func (d *Database) GetTaskHandlerByType(taskType string) (*TaskHandlerRegistry, error) {
 	var handler TaskHandlerRegistry
-	result := d.defaultDB.Where("task_type = ? AND status = ?", taskType, HandlerStatusEnabled).First(&handler)
+	result := d.db.Where("task_type = ? AND status = ?", taskType, HandlerStatusEnabled).First(&handler)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -357,34 +179,94 @@ func (d *Database) GetTaskHandlerByType(taskType string) (*TaskHandlerRegistry, 
 func (d *Database) RegisterTaskHandler(handler *TaskHandlerRegistry) error {
 	// 检查是否已存在相同类型的处理器
 	var existing TaskHandlerRegistry
-	result := d.defaultDB.Where("task_type = ?", handler.TaskType).First(&existing)
+	result := d.db.Where("task_type = ?", handler.TaskType).First(&existing)
 
 	if result.Error == nil {
 		// 已存在，更新
 		handler.ID = existing.ID
 		handler.UpdatedAt = time.Now()
-		return d.defaultDB.Save(handler).Error
+		return d.db.Save(handler).Error
 	} else {
 		// 不存在，创建新的
 		handler.CreatedAt = time.Now()
 		handler.UpdatedAt = time.Now()
 		handler.LastHeartbeat = time.Now()
-		return d.defaultDB.Create(handler).Error
+		return d.db.Create(handler).Error
 	}
 }
 
 // UpdateHandlerHeartbeat 更新处理器心跳
 func (d *Database) UpdateHandlerHeartbeat(taskType string) error {
 	now := time.Now()
-	return d.defaultDB.Model(&TaskHandlerRegistry{}).Where("task_type = ?", taskType).Update("last_heartbeat", now).Error
+	return d.db.Model(&TaskHandlerRegistry{}).Where("task_type = ?", taskType).Update("last_heartbeat", now).Error
 }
 
 // DeleteTaskHandler 删除任务处理器
 func (d *Database) DeleteTaskHandler(taskType string) error {
-	return d.defaultDB.Where("task_type = ?", taskType).Delete(&TaskHandlerRegistry{}).Error
+	return d.db.Where("task_type = ?", taskType).Delete(&TaskHandlerRegistry{}).Error
 }
 
 // DisableTaskHandler 禁用任务处理器
 func (d *Database) DisableTaskHandler(taskType string) error {
-	return d.defaultDB.Model(&TaskHandlerRegistry{}).Where("task_type = ?", taskType).Update("status", HandlerStatusDisabled).Error
+	return d.db.Model(&TaskHandlerRegistry{}).Where("task_type = ?", taskType).Update("status", HandlerStatusDisabled).Error
+}
+
+// CreateJobMetadata 创建任务元数据
+func (d *Database) CreateJobMetadata(metadata *JobMetadata) error {
+	metadata.CreatedAt = time.Now()
+	metadata.UpdatedAt = time.Now()
+	return d.db.Create(metadata).Error
+}
+
+// GetJobMetadata 获取任务元数据
+func (d *Database) GetJobMetadata(riverJobID int64) (*JobMetadata, error) {
+	var metadata JobMetadata
+	result := d.db.Where("river_job_id = ?", riverJobID).First(&metadata)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return &metadata, nil
+}
+
+// UpdateJobStatistics 更新任务统计
+func (d *Database) UpdateJobStatistics(date time.Time, queueName, taskType string, total, success, failed int, avgDuration int) error {
+	stats := JobStatistics{
+		Date:          date,
+		QueueName:     queueName,
+		TaskType:      taskType,
+		TotalCount:    total,
+		SuccessCount:  success,
+		FailedCount:   failed,
+		AvgDurationMs: avgDuration,
+		UpdatedAt:     time.Now(),
+	}
+
+	// 使用 ON CONFLICT 更新或插入
+	return d.db.Save(&stats).Error
+}
+
+// GetJobStatistics 获取任务统计
+func (d *Database) GetJobStatistics(startDate, endDate time.Time, queueName, taskType string) ([]JobStatistics, error) {
+	var stats []JobStatistics
+	query := d.db.Where("date >= ? AND date <= ?", startDate, endDate)
+
+	if queueName != "" {
+		query = query.Where("queue_name = ?", queueName)
+	}
+	if taskType != "" {
+		query = query.Where("task_type = ?", taskType)
+	}
+
+	result := query.Order("date DESC").Find(&stats)
+	return stats, result.Error
+}
+
+func (d *Database) GetPendingTasks(db *gorm.DB, tableName, queueName string, limit int) (tasks []TaskData) {
+	db.Table(tableName).
+		Where("status = ?", TaskStatusPending).
+		Where("queue_name = ?", queueName).
+		Where("schedule_time <= ?", time.Now()).
+		Order("schedule_time ASC").
+		Limit(limit).Find(&tasks)
+	return
 }

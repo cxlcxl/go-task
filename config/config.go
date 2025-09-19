@@ -27,31 +27,34 @@ type Config struct {
 		ServerID string `yaml:"server_id"`
 	} `yaml:"executor"`
 
-	Database map[string]struct {
+	// PostgreSQL 数据库配置
+	PostgreSQL struct {
 		Host     string `yaml:"host"`
 		Port     int    `yaml:"port"`
 		Username string `yaml:"username"`
 		Password string `yaml:"password"`
 		Database string `yaml:"database"`
-		Charset  string `yaml:"charset"`
-	} `yaml:"database"`
+		SSLMode  string `yaml:"ssl_mode"`
+		MaxConns int    `yaml:"max_conns"`
+		MinConns int    `yaml:"min_conns"`
+	} `yaml:"postgresql"`
 
-	Queue struct {
-		Enable             bool `yaml:"enable"`
-		ConfigSyncInterval int  `yaml:"config_sync_interval"`
-	} `yaml:"queue"`
+	// River 队列配置
+	River struct {
+		Enable               bool                   `yaml:"enable"`
+		Workers              int                    `yaml:"workers"`
+		Queues               map[string]QueueConfig `yaml:"queues"`
+		PollOnly             bool                   `yaml:"poll_only"`               // 仅轮询，不处理任务
+		InsertOnly           bool                   `yaml:"insert_only"`             // 仅插入任务
+		RescueStuckJobsAfter string                 `yaml:"rescue_stuck_jobs_after"` // 如 "1h"
+		MaxAttempts          int                    `yaml:"max_attempts"`            // 最大重试次数
+	} `yaml:"river"`
+}
 
-	Redis struct {
-		Addr     string `yaml:"addr"`
-		Password string `yaml:"password"`
-		DB       int    `yaml:"db"`
-	} `yaml:"redis"`
-
-	Asynq struct {
-		Enable      bool           `yaml:"enable"`
-		Concurrency int            `yaml:"concurrency"`
-		Queues      map[string]int `yaml:"queues"`
-	} `yaml:"asynq"`
+// QueueConfig 队列配置
+type QueueConfig struct {
+	MaxWorkers int `yaml:"max_workers"` // 最大工作协程数
+	Priority   int `yaml:"priority"`    // 队列优先级
 }
 
 // LoadConfig loads configuration from file

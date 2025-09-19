@@ -8,14 +8,14 @@ import (
 	"os/signal"
 	"syscall"
 
-	"xxljob-go-executor/admin"
-	"xxljob-go-executor/asynq"
-	"xxljob-go-executor/config"
-	"xxljob-go-executor/database"
-	"xxljob-go-executor/executor"
-	"xxljob-go-executor/handlers"
-	"xxljob-go-executor/jobs"
-	"xxljob-go-executor/logger"
+	"task-executor/admin"
+	"task-executor/config"
+	"task-executor/database"
+	"task-executor/executor"
+	"task-executor/handlers"
+	"task-executor/jobs"
+	"task-executor/logger"
+	"task-executor/queue"
 )
 
 func main() {
@@ -26,67 +26,68 @@ func main() {
 	}
 
 	// 初始化日志
-	if err := logger.Init(cfg.XXLJob.LogPath); err != nil {
+	if err = logger.Init(cfg.XXLJob.LogPath); err != nil {
 		fmt.Printf("初始化日志失败: %v\n", err)
 		os.Exit(1)
 	}
 
-	logger.Info("启动XXL-JOB Go执行器...")
+	logger.Info("启动 Go 执行器...")
 	logger.Info("服务器ID: %s", cfg.Executor.ServerID)
 	logger.Info("配置: %+v", cfg)
 
 	// 初始化数据库连接
 	var db *database.Database
-	var asynqManager *asynq.AsynqManager
-
-	if cfg.Asynq.Enable {
-		// 创建多数据库连接配置
-		dbConfigs := make(map[string]database.Config)
-		for name, dbCfg := range cfg.Database {
-			dbConfigs[name] = database.Config{
-				Host:     dbCfg.Host,
-				Port:     dbCfg.Port,
-				Username: dbCfg.Username,
-				Password: dbCfg.Password,
-				Database: dbCfg.Database,
-				Charset:  dbCfg.Charset,
-			}
-		}
-
-		db, err = database.NewDatabase(dbConfigs)
-		if err != nil {
-			logger.Error("连接数据库失败: %v", err)
-			os.Exit(1)
-		}
-
-		// 创建基于Asynq的队列管理器（完全替换原有系统）
-		asynqManager, err = asynq.NewAsynqManager(cfg)
-		if err != nil {
-			logger.Error("初始化Asynq管理器失败: %v", err)
-			os.Exit(1)
-		}
-
-		// 创建任务处理器
-		taskProcessor := asynq.NewTaskProcessor(asynqManager, db, cfg.Executor.ServerID)
-
-		// 启动Asynq系统
-		if err := asynqManager.Start(); err != nil {
-			logger.Error("启动Asynq管理器失败: %v", err)
-			os.Exit(1)
-		}
-
-		// 注册Asynq任务处理器
-		registerAsynqTaskHandlers(asynqManager)
-
-		// 启动任务迁移（处理数据库中的遗留任务）
-		go func() {
-			if err := taskProcessor.ProcessDatabaseTasks(); err != nil {
-				logger.Error("初始任务迁移失败: %v", err)
-			}
-		}()
-
-		logger.Info("Asynq队列系统启动成功")
+	var manager *queue.Manager
+	// 创建 PostgreSQL 数据库连接配置
+	dbConfig := database.Config{
+		Host:     cfg.PostgreSQL.Host,
+		Port:     cfg.PostgreSQL.Port,
+		Username: cfg.PostgreSQL.Username,
+		Password: cfg.PostgreSQL.Password,
+		Database: cfg.PostgreSQL.Database,
+		SSLMode:  cfg.PostgreSQL.SSLMode,
+		MaxConns: cfg.PostgreSQL.MaxConns,
+		MinConns: cfg.PostgreSQL.MinConns,
 	}
+
+	// 创建数据库连接
+	db, err = database.NewDatabase(dbConfig)
+	if err != nil {
+		logger.Error("连接PostgreSQL数据库失败: %v", err)
+		os.Exit(1)
+	}
+
+	// 自动迁移数据库表结构（仅在开发环境中使用）
+	// 生产环境建议手动运行 SQL 脚本
+	if os.Getenv("AUTO_MIGRATE") == "true" {
+		if err = db.AutoMigrate(); err != nil {
+			logger.Error("数据库迁移失败: %v", err)
+			os.Exit(1)
+		}
+		logger.Info("数据库表结构迁移完成")
+	}
+
+	// 创建 River 队列管理器
+	manager, err = queue.NewManager(cfg, db, cfg.Executor.ServerID)
+	if err != nil {
+		logger.Error("初始化River管理器失败: %v", err)
+		os.Exit(1)
+	}
+
+	// 注册 River 任务处理器
+	//registerRiverTaskHandlers(manager)
+
+	// 启动 River 系统
+	if err = manager.Start(); err != nil {
+		logger.Error("启动River管理器失败: %v", err)
+		os.Exit(1)
+	}
+
+	// 创建管理接口
+	//adminHandler := admin.NewRiverAdminHandler(riverManager, db)
+	//setupAdminRoutes(adminHandler)
+
+	logger.Info("队列系统启动成功")
 
 	// 创建XXL-JOB执行器
 	exec := executor.NewExecutor(cfg)
@@ -95,7 +96,7 @@ func main() {
 	registerXXLJobHandlers(exec)
 
 	// 启动执行器（注册和心跳）
-	if err := exec.Start(); err != nil {
+	if err = exec.Start(); err != nil {
 		logger.Error("启动执行器失败: %v", err)
 		os.Exit(1)
 	}
@@ -104,31 +105,19 @@ func main() {
 	httpHandler := handlers.NewHTTPHandler(exec)
 	setupHTTPRoutes(httpHandler)
 
-	// 设置管理接口
-	if db != nil {
-		adminHandler := admin.NewAdminHandler(db)
-		setupAdminRoutes(adminHandler)
-
-		// 设置Asynq管理接口
-		if asynqManager != nil {
-			asynqAdminHandler := admin.NewAsynqAdminHandler(asynqManager)
-			setupAsynqAdminRoutes(asynqAdminHandler)
-		}
-	}
-
 	// 启动HTTP服务器
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	logger.Info("启动HTTP服务器: %s", addr)
 
 	go func() {
-		if err := http.ListenAndServe(addr, nil); err != nil {
+		if err = http.ListenAndServe(addr, nil); err != nil {
 			logger.Error("HTTP服务器启动失败: %v", err)
 			os.Exit(1)
 		}
 	}()
 
 	// 等待关闭信号
-	waitForShutdown(asynqManager)
+	waitForShutdown(manager, db)
 }
 
 func registerXXLJobHandlers(exec *executor.Executor) {
@@ -143,15 +132,15 @@ func registerXXLJobHandlers(exec *executor.Executor) {
 	logger.Info("所有XXL-JOB任务处理器注册成功")
 }
 
-func registerAsynqTaskHandlers(asynqManager *asynq.AsynqManager) {
-	// 注册队列任务处理器到Asynq
-	asynqManager.RegisterTaskHandler("email", jobs.NewEmailTaskHandler())
-	asynqManager.RegisterTaskHandler("data_sync", jobs.NewDataSyncTaskHandler())
-	asynqManager.RegisterTaskHandler("file_process", jobs.NewFileProcessTaskHandler())
-	asynqManager.RegisterTaskHandler("report_generate", jobs.NewReportGenerateTaskHandler())
-	asynqManager.RegisterTaskHandler("notification", jobs.NewNotificationTaskHandler())
+func registerRiverTaskHandlers(riverManager *queue.RiverManager) {
+	// 注册队列任务处理器到River
+	riverManager.RegisterTaskHandler("email", jobs.NewEmailTaskHandler())
+	riverManager.RegisterTaskHandler("data_sync", jobs.NewDataSyncTaskHandler())
+	riverManager.RegisterTaskHandler("file_process", jobs.NewFileProcessTaskHandler())
+	riverManager.RegisterTaskHandler("report_generate", jobs.NewReportGenerateTaskHandler())
+	riverManager.RegisterTaskHandler("notification", jobs.NewNotificationTaskHandler())
 
-	logger.Info("所有Asynq任务处理器注册成功")
+	logger.Info("所有River任务处理器注册成功")
 }
 
 func setupHTTPRoutes(handler *handlers.HTTPHandler) {
@@ -170,58 +159,39 @@ func setupHTTPRoutes(handler *handlers.HTTPHandler) {
 	logger.Info("HTTP路由配置完成")
 }
 
-func setupAdminRoutes(handler *admin.AdminHandler) {
-	// 队列管理接口
-	http.HandleFunc("/admin/queue/create", handler.CreateQueueConfig)
-	http.HandleFunc("/admin/queue/update", handler.UpdateQueueConfig)
-	http.HandleFunc("/admin/queue/list", handler.GetQueueConfigs)
-	http.HandleFunc("/admin/queue/delete", handler.DeleteQueueConfig)
+func setupAdminRoutes(handler *admin.RiverAdminHandler) {
+	// River管理接口
+	http.HandleFunc("/admin/queue/stats", handler.GetStats)
+	http.HandleFunc("/admin/queue/jobs", handler.ListJobs)
+	http.HandleFunc("/admin/queue/cancel", handler.CancelJob)
+	http.HandleFunc("/admin/queue/enqueue", handler.EnqueueJob)
+	http.HandleFunc("/admin/queue/dashboard", handler.GetQueueDashboard)
 
-	// 服务器管理接口
-	http.HandleFunc("/admin/server/list", handler.GetServerInfos)
-
-	// 任务管理接口
-	http.HandleFunc("/admin/task/create", handler.CreateTask)
-
-	// 处理器管理接口
-	http.HandleFunc("/admin/handler/register", handler.RegisterHandler)
+	// 任务处理器管理
 	http.HandleFunc("/admin/handler/list", handler.ListHandlers)
-	http.HandleFunc("/admin/handler/get", handler.GetHandler)
+	http.HandleFunc("/admin/handler/register", handler.RegisterHandler)
 	http.HandleFunc("/admin/handler/update", handler.UpdateHandler)
 	http.HandleFunc("/admin/handler/delete", handler.DeleteHandler)
-	http.HandleFunc("/admin/handler/heartbeat", handler.HeartbeatHandler)
 
-	logger.Info("管理接口路由配置完成")
+	logger.Info("River管理接口路由配置完成")
 }
 
-func setupAsynqAdminRoutes(handler *admin.AsynqAdminHandler) {
-	// Asynq管理接口
-	http.HandleFunc("/admin/asynq/stats", handler.GetAsynqStats)
-	http.HandleFunc("/admin/asynq/tasks", handler.ListAsynqTasks)
-	http.HandleFunc("/admin/asynq/cancel", handler.CancelAsynqTask)
-	http.HandleFunc("/admin/asynq/enqueue", handler.EnqueueTask)
-	http.HandleFunc("/admin/asynq/migrate", handler.TriggerMigration)
-	http.HandleFunc("/admin/asynq/dashboard", handler.GetQueueDashboard)
-	http.HandleFunc("/admin/asynq/ui", handler.GetAsynqWebUI)
-
-	logger.Info("Asynq管理接口路由配置完成")
-}
-
-func waitForShutdown(asynqManager *asynq.AsynqManager) {
+func waitForShutdown(manager *queue.Manager, db *database.Database) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
 	logger.Info("正在关闭执行器...")
 
-	// 关闭Asynq管理器（优雅关闭）
-	if asynqManager != nil {
-		asynqManager.Stop()
+	// 关闭River管理器（优雅关闭）
+	if manager != nil {
+		manager.Stop()
 	}
 
-	// TODO: 实现优雅关闭
-	// - 停止接收新任务
-	// - 等待正在执行的任务完成
-	// - 从 XXL-JOB 管理台取消注册
+	// 关闭数据库连接
+	if db != nil {
+		db.Close()
+	}
+
 	logger.Info("执行器已停止")
 }

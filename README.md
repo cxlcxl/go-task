@@ -1,271 +1,245 @@
-## 功能概述
+# River 队列系统部署文档
 
-本系统实现了基于数据库的分布式任务队列，支持以下核心功能：
+## 简介
 
-1. **自定义队列并发控制** - 为每个队列配置独立的协程并发数
-2. **数据库驱动的任务调度** - 基于数据库表扫描的常驻任务调度系统
-3. **服务器隔离** - 支持指定队列只在特定服务器上运行
-4. **动态扩展** - 支持动态调整队列与服务器的关联关系
+本系统已经从 MySQL+Asynq 架构迁移到 PostgreSQL+River 架构，提供更强大的队列处理能力和更好的可靠性。
+
+## 主要特性
+
+- **基于PostgreSQL**: 利用PostgreSQL的ACID特性确保任务的可靠性
+- **高性能**: River专为高吞吐量设计，支持并发处理
+- **任务重试**: 自动重试失败的任务，支持指数退避策略
+- **任务监控**: 提供完整的Web管理界面
+- **动态配置**: 支持运行时动态调整队列配置
+- **任务统计**: 详细的任务执行统计和报告
 
 ## 快速开始
 
 ### 1. 数据库初始化
 
+首先创建PostgreSQL数据库并执行初始化脚本：
+
 ```bash
-# 导入数据库结构和示例数据
-mysql -u root -p < init.sql
+# 创建数据库
+createdb river_queue
+
+# 执行初始化脚本
+psql -d river_queue -f init-river-postgresql.sql
+
+# 运行River迁移（创建River核心表）
+go run cmd/river/migrate.go up --database-url "postgres://user:password@localhost:5432/river_queue"
 ```
 
-### 2. 配置修改
+### 2. 配置文件
 
-编辑 `config.json` 文件：
+复制配置示例文件并修改：
 
-```json
-{
-  "database": {
-    "host": "localhost",
-    "port": 3306,
-    "username": "root",
-    "password": "your_password",
-    "database": "xxljob_executor",
-    "charset": "utf8mb4"
-  },
-  "executor": {
-    "server_id": "server-001"
-  },
-  "queue": {
-    "enable": true,
-    "config_sync_interval": 10
-  }
-}
+```bash
+cp config-river.example.yaml config.yaml
 ```
+
+修改 `config.yaml` 中的数据库连接信息和其他配置。
 
 ### 3. 启动服务
 
 ```bash
-# 安装依赖
-go mod tidy
-
-# 启动服务
-go run main.go
+# 编译并启动
+go build -o river-executor
+./river-executor
 ```
 
-## 核心概念
+## 配置说明
 
-### 队列配置表 (queue_configs)
+### PostgreSQL配置
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| queue_name | varchar(100) | 队列名称，唯一标识 |
-| table_name | varchar(100) | 关联的任务表名 |
-| server_id | varchar(50) | 指定运行的服务器ID，空表示任意服务器 |
-| max_workers | int | 最大并发协程数 |
-| scan_interval | int | 扫描间隔(秒) |
-| status | tinyint | 状态 1:启用 0:禁用 |
-
-### 任务表结构
-
-所有任务表都必须包含以下基础字段：
-
-```sql
-CREATE TABLE `your_task_table` (
-  `id` bigint(20) NOT NULL AUTO_INCREMENT,
-  `task_type` varchar(50) NOT NULL COMMENT '任务类型',
-  `task_params` text COMMENT '任务参数(JSON格式)',
-  `status` tinyint(1) DEFAULT 0 COMMENT '0:待执行 1:执行中 2:已完成 3:失败 4:取消',
-  `schedule_time` datetime NOT NULL COMMENT '计划执行时间',
-  `start_time` datetime DEFAULT NULL,
-  `end_time` datetime DEFAULT NULL,
-  `retry_count` int(11) DEFAULT 0,
-  `max_retries` int(11) DEFAULT 3,
-  `error_msg` text,
-  `server_id` varchar(50) DEFAULT '',
-  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  KEY `idx_status_schedule` (`status`, `schedule_time`)
-);
+```yaml
+postgresql:
+  host: "localhost"          # 数据库主机
+  port: 5432                # 数据库端口
+  username: "postgres"       # 用户名
+  password: "your_password"  # 密码
+  database: "river_queue"    # 数据库名
+  ssl_mode: "disable"        # SSL模式
+  max_conns: 100            # 最大连接数
+  min_conns: 10             # 最小连接数
 ```
 
-## 管理接口
+### River队列配置
 
-### 队列管理
+```yaml
+river:
+  enable: true                          # 启用River队列
+  workers: 50                           # 默认工作协程数
+  poll_only: false                      # 仅轮询模式
+  insert_only: false                    # 仅插入模式
+  rescue_stuck_jobs_after: "1h"         # 救援卡住的任务
+  max_attempts: 3                       # 默认重试次数
 
-#### 创建队列配置
+  queues:
+    default:
+      max_workers: 20                   # 队列最大工作协程
+      priority: 1                       # 队列优先级
+```
+
+## 任务管理
+
+### 任务入队
+
+通过HTTP API入队任务：
+
 ```bash
-curl -X POST http://localhost:9999/admin/queue/create \
-  -H "Content-Type: application/json" \
-  -d '{
-    "queue_name": "new_queue",
-    "table_name": "new_tasks",
-    "server_id": "server-001",
-    "max_workers": 5,
-    "scan_interval": 3,
-    "status": 1
-  }'
-```
-
-#### 获取队列列表
-```bash
-curl http://localhost:9999/admin/queue/list
-```
-
-#### 更新队列配置
-```bash
-curl -X PUT "http://localhost:9999/admin/queue/update?id=1" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "max_workers": 10,
-    "server_id": "server-002"
-  }'
-```
-
-#### 删除队列配置
-```bash
-curl -X DELETE "http://localhost:9999/admin/queue/delete?id=1"
-```
-
-### 服务器管理
-
-#### 查看服务器状态
-```bash
-curl http://localhost:9999/admin/server/list
-```
-
-### 任务管理
-
-#### 创建任务
-```bash
-# 创建邮件任务
-curl -X POST "http://localhost:9999/admin/task/create?table=email_tasks" \
+curl -X POST http://localhost:9999/admin/queue/enqueue \
   -H "Content-Type: application/json" \
   -d '{
     "task_type": "email",
-    "task_params": {
-      "to": ["user@example.com"],
-      "subject": "测试邮件",
-      "content": "这是一封测试邮件",
-      "type": "html"
-    },
-    "schedule_time": "2024-01-01 10:00:00",
-    "max_retries": 3
+    "task_params": "{\"to\":\"user@example.com\",\"subject\":\"Test\"}",
+    "queue": "email",
+    "priority": 5
   }'
+```
 
-# 创建数据同步任务
-curl -X POST "http://localhost:9999/admin/task/create?table=data_sync_tasks" \
+### 任务查询
+
+```bash
+# 获取队列统计
+curl http://localhost:9999/admin/queue/stats
+
+# 获取任务列表
+curl http://localhost:9999/admin/queue/jobs?queue=default&state=available
+
+# 获取仪表板数据
+curl http://localhost:9999/admin/queue/dashboard
+```
+
+### 任务取消
+
+```bash
+curl -X POST http://localhost:9999/admin/queue/cancel \
+  -H "Content-Type: application/json" \
+  -d '{"job_id": 12345}'
+```
+
+## 任务处理器管理
+
+### 注册处理器
+
+```bash
+curl -X POST http://localhost:9999/admin/handler/register \
   -H "Content-Type: application/json" \
   -d '{
-    "task_type": "data_sync",
-    "task_params": {
-      "source_db": "db1",
-      "target_db": "db2",
-      "table_name": "users",
-      "sync_type": "incremental",
-      "batch_size": 1000
-    },
-    "schedule_time": "2024-01-01 02:00:00",
-    "max_retries": 2
+    "task_type": "custom_task",
+    "handler_name": "CustomTaskHandler",
+    "handler_type": "http",
+    "endpoint_url": "http://localhost:8080/handle",
+    "timeout": 60,
+    "retry_count": 3,
+    "description": "自定义任务处理器"
   }'
 ```
 
-## 使用场景示例
+### 处理器类型
 
-### 场景1：多服务器队列隔离
-
-假设您有3台服务器，希望不同类型的任务在不同服务器上执行：
-
-```sql
--- 服务器1: 专门处理邮件任务
-INSERT INTO queue_configs (queue_name, table_name, server_id, max_workers, scan_interval)
-VALUES ('email_queue', 'email_tasks', 'server-001', 10, 2);
-
--- 服务器2: 专门处理数据同步任务
-INSERT INTO queue_configs (queue_name, table_name, server_id, max_workers, scan_interval)
-VALUES ('sync_queue', 'data_sync_tasks', 'server-002', 5, 5);
-
--- 服务器3: 处理报表生成任务
-INSERT INTO queue_configs (queue_name, table_name, server_id, max_workers, scan_interval)
-VALUES ('report_queue', 'report_tasks', 'server-003', 3, 10);
-```
-
-### 场景2：动态调整负载
-
-当某台服务器负载过高时，可以动态调整队列分配：
-
-```sql
--- 将邮件队列从server-001转移到server-002
-UPDATE queue_configs SET server_id = 'server-002' WHERE queue_name = 'email_queue';
-
--- 或者允许任意服务器处理
-UPDATE queue_configs SET server_id = '' WHERE queue_name = 'email_queue';
-```
-
-### 场景3：控制并发数
-
-根据任务类型和服务器性能调整并发数：
-
-```sql
--- 高并发邮件发送
-UPDATE queue_configs SET max_workers = 20 WHERE queue_name = 'email_queue';
-
--- 低并发数据同步（避免数据库压力）
-UPDATE queue_configs SET max_workers = 2 WHERE queue_name = 'sync_queue';
-```
-
-## 自定义任务处理器
-
-### 1. 实现JobHandler接口
-
-```go
-type CustomTaskHandler struct{}
-
-func (h *CustomTaskHandler) Execute(ctx *models.JobContext) error {
-    // 解析任务参数
-    var params YourParamsStruct
-    if err := json.Unmarshal([]byte(ctx.JobParam), &params); err != nil {
-        return fmt.Errorf("解析参数失败: %w", err)
-    }
-
-    // 执行具体业务逻辑
-    // ...
-
-    return nil
-}
-```
-
-### 2. 注册处理器
-
-在 `main.go` 的 `registerQueueTaskHandlers` 函数中添加：
-
-```go
-queueManager.RegisterTaskHandler("your_task_type", &CustomTaskHandler{})
-```
+- **local**: 本地处理器（直接调用Go函数）
+- **http**: HTTP处理器（调用HTTP接口）
+- **grpc**: gRPC处理器（调用gRPC服务）
 
 ## 监控和日志
 
-### 日志位置
-- 主日志：`./logs/executor-YYYY-MM-DD.log`
-- 任务日志：`./logs/job-{logID}-YYYY-MM-DD.log`
+### 日志配置
+
+日志文件存储在配置的 `log_path` 目录中，按日期轮转。
 
 ### 监控指标
-- 队列状态：通过管理接口查看
-- 服务器状态：心跳监控
-- 任务执行状态：数据库记录
 
-## 注意事项
+- 任务执行统计
+- 队列长度监控
+- 处理器健康状态
+- 错误率统计
 
-1. **数据库连接** - 确保数据库连接配置正确
-2. **表结构** - 所有任务表必须包含基础字段
-3. **服务器ID** - 每个服务器实例必须有唯一的server_id
-4. **并发控制** - 根据服务器性能合理设置max_workers
-5. **扫描间隔** - 平衡实时性和数据库压力
-6. **错误处理** - 合理设置重试次数和错误处理逻辑
+## 部署建议
 
-## 故障排查
+### 生产环境部署
+
+1. **数据库优化**:
+   ```sql
+   -- 优化PostgreSQL配置
+   ALTER SYSTEM SET shared_buffers = '256MB';
+   ALTER SYSTEM SET max_connections = 200;
+   ALTER SYSTEM SET checkpoint_completion_target = 0.9;
+   ```
+
+2. **集群部署**:
+   - 部署2-3个调度器实例
+   - 使用不同的 `server_id`
+   - 共享相同的PostgreSQL数据库
+
+3. **监控设置**:
+   - 监控PostgreSQL性能
+   - 监控队列长度
+   - 设置告警规则
+
+### Docker部署
+
+```dockerfile
+FROM golang:1.22-alpine AS builder
+WORKDIR /app
+COPY . .
+RUN go build -o river-executor
+
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates
+WORKDIR /root/
+COPY --from=builder /app/river-executor .
+COPY --from=builder /app/config-river.example.yaml ./config.yaml
+CMD ["./river-executor"]
+```
+
+## 故障排除
 
 ### 常见问题
 
-1. **队列不工作** - 检查queue_configs表中的status字段和server_id匹配
-2. **任务不执行** - 确认schedule_time和当前时间的关系
-3. **数据库连接失败** - 检查配置文件中的数据库连接信息
-4. **任务处理器未找到** - 确认task_type与注册的处理器名称匹配
+1. **连接失败**:
+   - 检查PostgreSQL连接信息
+   - 确认防火墙设置
+   - 验证SSL配置
+
+2. **任务不执行**:
+   - 检查处理器注册状态
+   - 验证队列配置
+   - 查看错误日志
+
+3. **性能问题**:
+   - 调整工作协程数
+   - 优化数据库索引
+   - 增加连接池大小
+
+### 日志分析
+
+```bash
+# 查看最近的错误日志
+tail -f logs/executor.log | grep ERROR
+
+# 查看任务执行统计
+curl http://localhost:9999/admin/queue/dashboard
+```
+
+## API 参考
+
+### 队列管理 API
+
+- `GET /admin/queue/stats` - 获取统计信息
+- `GET /admin/queue/jobs` - 获取任务列表
+- `POST /admin/queue/enqueue` - 入队任务
+- `POST /admin/queue/cancel` - 取消任务
+- `GET /admin/queue/dashboard` - 获取仪表板
+
+### 处理器管理 API
+
+- `GET /admin/handler/list` - 列出处理器
+- `POST /admin/handler/register` - 注册处理器
+- `PUT /admin/handler/update` - 更新处理器
+- `DELETE /admin/handler/delete` - 删除处理器
+
+## 迁移指南
+
+从旧的MySQL+Asynq系统迁移到River系统，请参考迁移工具使用说明。
