@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"task-executor/defines"
 	"time"
 
 	"task-executor/config"
@@ -29,12 +30,20 @@ func NewExecutor(cfg *config.Config) *Executor {
 	}
 }
 
+func RegisterXXLJobHandlers(exec *Executor) {
+	// 注册各种任务处理器
+	for queueName, handler := range defines.XXLJobHandlers {
+		exec.RegisterJobHandler(queueName, handler)
+	}
+
+	logger.Info("XXL-JOB任务处理器注册成功")
+}
+
 // RegisterJobHandler registers a job handler
 func (e *Executor) RegisterJobHandler(name string, handler models.JobHandler) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 	e.handlers[name] = handler
-	logger.Info("Registered job handler: %s", name)
 }
 
 // Start starts the executor

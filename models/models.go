@@ -77,4 +77,4 @@ type JobHandler interface {
 	Execute(ctx *JobContext) error
 }
 
-type QueueTaskHandler func(database.TaskData, database.QueueTable) func()
+type TaskHandler func(*database.Database, *database.TaskData, database.QueueTable) func()

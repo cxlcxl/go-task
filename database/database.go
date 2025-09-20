@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"task-executor/config"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,81 +19,69 @@ type Database struct {
 	dbs     map[string]*gorm.DB
 }
 
-type Config struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Database string `json:"database"`
-	SSLMode  string `json:"ssl_mode"`
-	MaxConns int    `json:"max_conns"`
-	MinConns int    `json:"min_conns"`
-}
-
-func NewDatabase(config Config) (*Database, error) {
-	// 构建 PostgreSQL DSN
-	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%d sslmode=%s",
-		config.Host, config.Username, config.Password, config.Database, config.Port, config.SSLMode)
-
-	// 创建 GORM 连接
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("连接PostgreSQL数据库失败: %w", err)
+func NewDatabase(configs map[string]config.PgSQL) (*Database, error) {
+	_db := &Database{
+		ctx: context.Background(),
+		dbs: make(map[string]*gorm.DB),
 	}
+	for connectName, cfg := range configs {
+		// 构建 PostgreSQL DSN
+		dsn := fmt.Sprintf(
+			"host=%s user=%s password=%s dbname=%s port=%d sslmode=%s",
+			cfg.Host, cfg.Username, cfg.Password, cfg.Database, cfg.Port, cfg.SSLMode,
+		)
 
-	// 设置连接池
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, err
-	}
+		// 创建 GORM 连接
+		db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+			Logger: logger.Default.LogMode(logger.Info),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("连接PostgreSQL数据库失败: %w", err)
+		}
 
-	// 设置连接池参数
-	maxConns := config.MaxConns
-	if maxConns == 0 {
-		maxConns = 100
-	}
-	minConns := config.MinConns
-	if minConns == 0 {
-		minConns = 10
-	}
+		// 设置连接池
+		sqlDB, err := db.DB()
+		if err != nil {
+			return nil, err
+		}
 
-	sqlDB.SetMaxIdleConns(minConns)
-	sqlDB.SetMaxOpenConns(maxConns)
-	sqlDB.SetConnMaxLifetime(time.Hour)
+		// 设置连接池参数
+		sqlDB.SetMaxIdleConns(cfg.MinConns)
+		sqlDB.SetMaxOpenConns(cfg.MaxConns)
+		sqlDB.SetConnMaxLifetime(time.Hour)
+
+		if connectName == DbConnectDefault {
+			_db.db = db
+		}
+		_db.dbs[connectName] = db
+	}
 
 	// 创建 pgx 连接池（为 River 使用）
-	pgxDSN := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-		config.Username, config.Password, config.Host, config.Port, config.Database, config.SSLMode)
+	//pgxDSN := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
+	//	config.Username, config.Password, config.Host, config.Port, config.Database, config.SSLMode)
+	//
+	//pgxConfig, err := pgxpool.ParseConfig(pgxDSN)
+	//if err != nil {
+	//	return nil, fmt.Errorf("解析pgx配置失败: %w", err)
+	//}
+	//
+	//// 设置 pgx 连接池参数
+	//pgxConfig.MaxConns = int32(maxConns)
+	//pgxConfig.MinConns = int32(minConns)
+	//pgxConfig.MaxConnLifetime = time.Hour
+	//pgxConfig.MaxConnIdleTime = 30 * time.Minute
+	//
+	//pgxPool, err := pgxpool.NewWithConfig(ctx, pgxConfig)
+	//if err != nil {
+	//	return nil, fmt.Errorf("创建pgx连接池失败: %w", err)
+	//}
+	//
+	//// 测试连接
+	//if err := pgxPool.Ping(ctx); err != nil {
+	//	return nil, fmt.Errorf("数据库连接测试失败: %w", err)
+	//}
 
-	pgxConfig, err := pgxpool.ParseConfig(pgxDSN)
-	if err != nil {
-		return nil, fmt.Errorf("解析pgx配置失败: %w", err)
-	}
-
-	// 设置 pgx 连接池参数
-	pgxConfig.MaxConns = int32(maxConns)
-	pgxConfig.MinConns = int32(minConns)
-	pgxConfig.MaxConnLifetime = time.Hour
-	pgxConfig.MaxConnIdleTime = 30 * time.Minute
-
-	ctx := context.Background()
-	pgxPool, err := pgxpool.NewWithConfig(ctx, pgxConfig)
-	if err != nil {
-		return nil, fmt.Errorf("创建pgx连接池失败: %w", err)
-	}
-
-	// 测试连接
-	if err := pgxPool.Ping(ctx); err != nil {
-		return nil, fmt.Errorf("数据库连接测试失败: %w", err)
-	}
-
-	return &Database{
-		db:      db,
-		pgxPool: pgxPool,
-		ctx:     ctx,
-	}, nil
+	return _db, nil
 }
 
 func (d *Database) GetDB() *gorm.DB {
@@ -259,14 +248,4 @@ func (d *Database) GetJobStatistics(startDate, endDate time.Time, queueName, tas
 
 	result := query.Order("date DESC").Find(&stats)
 	return stats, result.Error
-}
-
-func (d *Database) GetPendingTasks(db *gorm.DB, tableName, queueName string, limit int) (tasks []TaskData) {
-	db.Table(tableName).
-		Where("status = ?", TaskStatusPending).
-		Where("queue_name = ?", queueName).
-		Where("schedule_time <= ?", time.Now()).
-		Order("schedule_time ASC").
-		Limit(limit).Find(&tasks)
-	return
 }

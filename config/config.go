@@ -28,16 +28,7 @@ type Config struct {
 	} `yaml:"executor"`
 
 	// PostgreSQL 数据库配置
-	PostgreSQL struct {
-		Host     string `yaml:"host"`
-		Port     int    `yaml:"port"`
-		Username string `yaml:"username"`
-		Password string `yaml:"password"`
-		Database string `yaml:"database"`
-		SSLMode  string `yaml:"ssl_mode"`
-		MaxConns int    `yaml:"max_conns"`
-		MinConns int    `yaml:"min_conns"`
-	} `yaml:"postgresql"`
+	PostgreSQL map[string]PgSQL `yaml:"postgresql"`
 
 	// River 队列配置
 	River struct {
@@ -49,6 +40,17 @@ type Config struct {
 		RescueStuckJobsAfter string                 `yaml:"rescue_stuck_jobs_after"` // 如 "1h"
 		MaxAttempts          int                    `yaml:"max_attempts"`            // 最大重试次数
 	} `yaml:"river"`
+}
+
+type PgSQL struct {
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+	Database string `yaml:"database"`
+	SSLMode  string `yaml:"ssl_mode"`
+	MaxConns int    `yaml:"max_conns"`
+	MinConns int    `yaml:"min_conns"`
 }
 
 // QueueConfig 队列配置

@@ -1,4 +1,4 @@
-package queue
+package jobs
 
 import (
 	"context"
@@ -8,8 +8,8 @@ import (
 	"sync"
 	"task-executor/config"
 	"task-executor/database"
+	"task-executor/defines"
 	"task-executor/logger"
-	"task-executor/vars"
 	"time"
 )
 
@@ -22,6 +22,7 @@ type Manager struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	pools        syncmap.Map
+	deleteChan   chan int64
 }
 
 // NewManager 创建队列管理器
@@ -36,6 +37,7 @@ func NewManager(cfg *config.Config, db *database.Database, serverID string) (*Ma
 		ctx:          ctx,
 		cancel:       cancel,
 		pools:        syncmap.Map{},
+		deleteChan:   make(chan int64),
 	}
 	return manager, nil
 }
@@ -49,7 +51,7 @@ func (rm *Manager) Start() error {
 }
 
 func (rm *Manager) NewQueue(queueConfig database.QueueConfig, attempt int) {
-	handler, exists := vars.QueueTaskHandles[queueConfig.QueueName]
+	handler, exists := defines.TaskHandles[queueConfig.QueueName]
 	if !exists {
 		logger.Error(fmt.Sprintf("任务处理器未注册: %s", queueConfig.QueueName))
 		return
@@ -70,25 +72,25 @@ func (rm *Manager) NewQueue(queueConfig database.QueueConfig, attempt int) {
 	logger.Info(fmt.Sprintf("协程池启动成功，队列名称: %s", queueConfig.QueueName))
 
 	queueTable := rm.db.ParseTableName(queueConfig.TaskTable)
-	c, err := rm.db.GetConnect(queueTable)
-	if err != nil {
-		logger.Error(fmt.Sprintf("获取数据库连接失败，当前第 %d 次重试，错误信息: %s", attempt, err.Error()))
-		time.Sleep(time.Duration(1<<attempt) * time.Second)
-		rm.NewQueue(queueConfig, attempt+1)
-		return
-	}
-
 	for {
-		tasks := rm.db.GetPendingTasks(c, queueTable.TableName, queueConfig.QueueName, pool.Free())
+		freeWorkers := pool.Free()
+		if freeWorkers == 0 {
+			time.Sleep(time.Second * time.Duration(queueConfig.FrequencyInterval))
+			continue
+		}
+
+		tasks := rm.db.GetPendingTasks(queueTable, queueConfig.QueueName, rm.serverID, freeWorkers)
 		if len(tasks) == 0 {
-			time.Sleep(time.Second)
+			time.Sleep(time.Second * time.Duration(queueConfig.FrequencyInterval))
+			continue
 		}
 
 		for _, task := range tasks {
-			err = pool.Submit(handler(task, *queueTable))
+			err = pool.Submit(handler(rm.db, task, *queueTable))
 			if err != nil {
 				logger.Error(fmt.Sprintf("任务处理失败，错误信息: %s", err.Error()))
 			}
+			logger.Info(fmt.Sprintf("任务处理成功: %d", task.ID))
 		}
 	}
 }
@@ -96,7 +98,9 @@ func (rm *Manager) NewQueue(queueConfig database.QueueConfig, attempt int) {
 func (rm *Manager) watchQueueConfigs() {
 	rm.ListenQueue()
 
-	ticker := time.NewTicker(time.Minute * 2)
+	go rm.RemoveDisabledQueue()
+
+	ticker := time.NewTicker(time.Minute * 1)
 	for {
 		select {
 		case <-ticker.C:
@@ -115,11 +119,23 @@ func (rm *Manager) ListenQueue() {
 	for _, queueConfig := range configs {
 		value, ok := rm.pools.Load(queueConfig.QueueName)
 		// 没有协程池，新增的队列配置
-		if !ok && queueConfig.Status == database.QueueStatusEnabled {
-			go rm.NewQueue(queueConfig, 0)
-		}
-		if ok && queueConfig.Status == database.QueueStatusDisabled {
-			value.(*ants.Pool).Release()
+		if !ok {
+			if queueConfig.Status == database.QueueStatusEnabled {
+				logger.Info(fmt.Sprintf("补充协程池，队列名称: %s", queueConfig.QueueName))
+				go rm.NewQueue(queueConfig, 0)
+				continue
+			}
+		} else {
+			if queueConfig.Status == database.QueueStatusDisabled {
+				logger.Info(fmt.Sprintf("队列已禁用，正在释放协程池，队列名称: %s", queueConfig.QueueName))
+				value.(*ants.Pool).Release()
+				rm.pools.Delete(queueConfig.QueueName)
+				rm.deleteChan <- queueConfig.ID
+				continue
+			}
+			if queueConfig.MaxWorkers != value.(*ants.Pool).Cap() {
+				value.(*ants.Pool).Tune(queueConfig.MaxWorkers)
+			}
 		}
 	}
 }
@@ -136,4 +152,13 @@ func (rm *Manager) Stop() {
 	})
 
 	logger.Info("队列管理器已停止")
+}
+
+func (rm *Manager) RemoveDisabledQueue() {
+	for {
+		select {
+		case id := <-rm.deleteChan:
+			rm.db.RemoveDisabledQueue([]int64{id})
+		}
+	}
 }

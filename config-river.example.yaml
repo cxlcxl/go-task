@@ -23,14 +23,15 @@ executor:
 
 # PostgreSQL数据库配置
 postgresql:
-  host: "localhost"
-  port: 5432
-  username: "postgres"
-  password: "your_password"
-  database: "river_queue"
-  ssl_mode: "disable"       # SSL模式: disable, require, verify-ca, verify-full
-  max_conns: 100            # 最大连接数
-  min_conns: 10             # 最小连接数
+  default:
+    host: "localhost"
+    port: 5432
+    username: "postgres"
+    password: "your_password"
+    database: "river_queue"
+    ssl_mode: "disable"       # SSL模式: disable, require, verify-ca, verify-full
+    max_conns: 100            # 最大连接数
+    min_conns: 10             # 最小连接数
 
 # River队列系统配置
 river:
