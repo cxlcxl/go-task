@@ -1,4 +1,4 @@
-package defines
+package define
 
 import (
 	"task-executor/jobs/task"

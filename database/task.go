@@ -2,9 +2,29 @@ package database
 
 import (
 	"fmt"
+	"gorm.io/datatypes"
 	"task-executor/logger"
 	"time"
 )
+
+type TaskData struct {
+	ID           int64          `json:"id" gorm:"column:id;primaryKey;autoIncrement:true"`
+	BatchNo      string         `json:"batch_no" gorm:"column:batch_no;type:varchar(80);not null"`
+	QueueName    string         `json:"queue_name" gorm:"column:queue_name;type:varchar(80);not null"`
+	TaskParams   datatypes.JSON `json:"task_params" gorm:"column:task_params;type:jsonb;not null;default:'{}'"`
+	State        string         `json:"state" gorm:"column:state;type:varchar(20);not null"`
+	ScheduleTime time.Time      `json:"schedule_time" gorm:"column:schedule_time;type:timestamp;not null;default:'2000-01-01 00:00:00'"`
+	StartTime    time.Time      `json:"start_time" gorm:"column:start_time;type:timestamp;not null;default:'2000-01-01 00:00:00'"`
+	EndTime      time.Time      `json:"end_time" gorm:"column:end_time;type:timestamp;not null;default:'2000-01-01 00:00:00'"`
+	CostTime     int32          `json:"cost_time" gorm:"column:cost_time;type:integer;not null;default:0"`
+	RetryCount   int32          `json:"retry_count" gorm:"column:retry_count;type:integer;not null;default:0"`
+	MaxRetries   int32          `json:"max_retries" gorm:"column:max_retries;type:integer;not null;default:0"`
+	ExecResult   datatypes.JSON `json:"exec_result" gorm:"column:exec_result;type:jsonb;not null;default:'{}'"`
+	ServerID     string         `json:"server_id" gorm:"column:server_id;type:varchar(50);not null;default:''"`
+	TaskType     string         `json:"task_type" gorm:"column:task_type;type:varchar(30);not null;default:'default'"`
+	CreatedAt    time.Time      `json:"created_at" gorm:"column:created_at;type:timestamp;default:now()"`
+	UpdatedAt    time.Time      `json:"updated_at" gorm:"column:updated_at;type:timestamp;default:current_timestamp"`
+}
 
 func (d *Database) GetPendingTasks(queueTable *QueueTable, queueName, serverId string, limit int) (tasks []*TaskData) {
 	// 获取第一个连接用于更新操作

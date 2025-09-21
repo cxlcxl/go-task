@@ -1,10 +1,28 @@
 package database
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 var (
 	QueueConfigTableName = "queue_configs"
 )
+
+// QueueConfig 队列配置表
+type QueueConfig struct {
+	ID                int64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	QueueName         string    `json:"queue_name" gorm:"size:100;not null;comment:队列名称"`
+	MaxWorkers        int       `json:"max_workers" gorm:"default:1;comment:最大并发协程数"`
+	FrequencyInterval int       `json:"frequency_interval" gorm:"default:3;comment:扫表间隔(s)"`
+	Priority          int       `json:"priority" gorm:"default:1;comment:队列优先级"`
+	TaskTable         string    `json:"task_table" gorm:"size:200;comment:任务表 格式:连接名.表名"`
+	ServerID          string    `json:"server_id" gorm:"size:50;comment:指定运行的服务器ID"`
+	Status            int       `json:"status" gorm:"default:1;comment:状态 1:启用 0:禁用"`
+	CreatedAt         time.Time `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt         time.Time `json:"updated_at" gorm:"autoUpdateTime"`
+	IsDelete          int8      `json:"is_delete" gorm:"default:0;comment:是否删除"`
+}
 
 // GetQueueConfigs 获取队列配置
 func (d *Database) GetQueueConfigs(serverID string) ([]QueueConfig, error) {

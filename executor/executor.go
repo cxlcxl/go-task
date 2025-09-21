@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
-	"task-executor/defines"
+	"task-executor/define"
 	"time"
 
 	"task-executor/config"
@@ -32,7 +32,7 @@ func NewExecutor(cfg *config.Config) *Executor {
 
 func RegisterXXLJobHandlers(exec *Executor) {
 	// 注册各种任务处理器
-	for queueName, handler := range defines.XXLJobHandlers {
+	for queueName, handler := range define.XXLJobHandlers {
 		exec.RegisterJobHandler(queueName, handler)
 	}
 

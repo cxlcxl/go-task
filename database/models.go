@@ -1,28 +1,12 @@
 package database
 
 import (
-	"gorm.io/datatypes"
 	"time"
 )
 
 const (
 	DbConnectDefault = "default"
 )
-
-// QueueConfig 队列配置表
-type QueueConfig struct {
-	ID                int64     `json:"id" gorm:"primaryKey;autoIncrement"`
-	QueueName         string    `json:"queue_name" gorm:"size:100;not null;comment:队列名称"`
-	MaxWorkers        int       `json:"max_workers" gorm:"default:1;comment:最大并发协程数"`
-	FrequencyInterval int       `json:"frequency_interval" gorm:"default:3;comment:扫表间隔(s)"`
-	Priority          int       `json:"priority" gorm:"default:1;comment:队列优先级"`
-	TaskTable         string    `json:"task_table" gorm:"size:200;comment:任务表 格式:连接名.表名"`
-	ServerID          string    `json:"server_id" gorm:"size:50;comment:指定运行的服务器ID"`
-	Status            int       `json:"status" gorm:"default:1;comment:状态 1:启用 0:禁用"`
-	CreatedAt         time.Time `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt         time.Time `json:"updated_at" gorm:"autoUpdateTime"`
-	IsDelete          int8      `json:"is_delete" gorm:"default:0;comment:是否删除"`
-}
 
 // JobMetadata 任务元数据表
 type JobMetadata struct {
@@ -123,23 +107,4 @@ const (
 type QueueTable struct {
 	ConnectName string
 	TableName   string
-}
-
-type TaskData struct {
-	ID           int64          `gorm:"column:id;primaryKey;autoIncrement:true"`
-	BatchNo      string         `gorm:"column:batch_no;type:varchar(80);not null"`
-	QueueName    string         `gorm:"column:queue_name;type:varchar(80);not null"`
-	TaskParams   datatypes.JSON `gorm:"column:task_params;type:jsonb;not null;default:'{}'"`
-	State        string         `gorm:"column:state;type:varchar(20);not null"`
-	ScheduleTime time.Time      `gorm:"column:schedule_time;type:timestamp;not null;default:'2000-01-01 00:00:00'"`
-	StartTime    time.Time      `gorm:"column:start_time;type:timestamp;not null;default:'2000-01-01 00:00:00'"`
-	EndTime      time.Time      `gorm:"column:end_time;type:timestamp;not null;default:'2000-01-01 00:00:00'"`
-	CostTime     int32          `gorm:"column:cost_time;type:integer;not null;default:0"`
-	RetryCount   int32          `gorm:"column:retry_count;type:integer;not null;default:0"`
-	MaxRetries   int32          `gorm:"column:max_retries;type:integer;not null;default:0"`
-	ExecResult   datatypes.JSON `gorm:"column:exec_result;type:jsonb;not null;default:'{}'"`
-	ServerID     string         `gorm:"column:server_id;type:varchar(50);not null;default:''"`
-	TaskType     string         `gorm:"column:task_type;type:varchar(30);not null;default:'default'"`
-	CreatedAt    time.Time      `gorm:"column:created_at;type:timestamp;default:now()"`
-	UpdatedAt    time.Time      `gorm:"column:updated_at;type:timestamp;default:current_timestamp"`
 }
