@@ -13,6 +13,7 @@ func EmailSenderTask(db *database.Database, data *database.TaskData, table datab
 		logger.Info("------------ 开始执行任务: ", data, table)
 		time.Sleep(3 * time.Second)
 		logger.Info("------------ 执行完成任务: ", data, table)
+
 		_ = db.SetTaskFinish(&table, data.ID)
 	}
 }

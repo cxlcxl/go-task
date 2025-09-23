@@ -6,7 +6,6 @@ import (
 
 	"task-executor/executor"
 	"task-executor/logger"
-	"task-executor/models"
 )
 
 type HTTPHandler struct {
@@ -21,7 +20,7 @@ func NewHTTPHandler(exec *executor.Executor) *HTTPHandler {
 
 // Beat handles heartbeat requests
 func (h *HTTPHandler) Beat(w http.ResponseWriter, r *http.Request) {
-	result := &models.ReturnT{
+	result := &executor.ReturnT{
 		Code: 200,
 		Msg:  "success",
 	}
@@ -30,7 +29,7 @@ func (h *HTTPHandler) Beat(w http.ResponseWriter, r *http.Request) {
 
 // IdleBeat handles idle beat requests
 func (h *HTTPHandler) IdleBeat(w http.ResponseWriter, r *http.Request) {
-	var param models.IdleBeatParam
+	var param executor.IdleBeatParam
 	if err := h.readJSON(r, &param); err != nil {
 		h.writeErrorJSON(w, "Invalid request body")
 		return
@@ -42,7 +41,7 @@ func (h *HTTPHandler) IdleBeat(w http.ResponseWriter, r *http.Request) {
 
 // Run handles job execution requests
 func (h *HTTPHandler) Run(w http.ResponseWriter, r *http.Request) {
-	var param models.TriggerParam
+	var param executor.TriggerParam
 	if err := h.readJSON(r, &param); err != nil {
 		h.writeErrorJSON(w, "Invalid request body")
 		return
@@ -55,7 +54,7 @@ func (h *HTTPHandler) Run(w http.ResponseWriter, r *http.Request) {
 
 // Kill handles job termination requests
 func (h *HTTPHandler) Kill(w http.ResponseWriter, r *http.Request) {
-	var param models.KillParam
+	var param executor.KillParam
 	if err := h.readJSON(r, &param); err != nil {
 		h.writeErrorJSON(w, "Invalid request body")
 		return
@@ -68,7 +67,7 @@ func (h *HTTPHandler) Kill(w http.ResponseWriter, r *http.Request) {
 
 // Log handles log query requests
 func (h *HTTPHandler) Log(w http.ResponseWriter, r *http.Request) {
-	var param models.LogParam
+	var param executor.LogParam
 	if err := h.readJSON(r, &param); err != nil {
 		h.writeErrorJSON(w, "Invalid request body")
 		return
@@ -89,7 +88,7 @@ func (h *HTTPHandler) writeJSON(w http.ResponseWriter, v interface{}) {
 }
 
 func (h *HTTPHandler) writeErrorJSON(w http.ResponseWriter, message string) {
-	result := &models.ReturnT{
+	result := &executor.ReturnT{
 		Code: 500,
 		Msg:  message,
 	}

@@ -12,12 +12,11 @@ import (
 
 	"task-executor/config"
 	"task-executor/logger"
-	"task-executor/models"
 )
 
 type Executor struct {
 	config      *config.Config
-	handlers    map[string]models.JobHandler
+	handlers    map[string]JobHandler
 	runningJobs map[int]context.CancelFunc
 	mutex       sync.RWMutex
 }
@@ -25,7 +24,7 @@ type Executor struct {
 func NewExecutor(cfg *config.Config) *Executor {
 	return &Executor{
 		config:      cfg,
-		handlers:    make(map[string]models.JobHandler),
+		handlers:    make(map[string]JobHandler),
 		runningJobs: make(map[int]context.CancelFunc),
 	}
 }
@@ -40,7 +39,7 @@ func RegisterXXLJobHandlers(exec *Executor) {
 }
 
 // RegisterJobHandler registers a job handler
-func (e *Executor) RegisterJobHandler(name string, handler models.JobHandler) {
+func (e *Executor) RegisterJobHandler(name string, handler JobHandler) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 	e.handlers[name] = handler
@@ -70,7 +69,7 @@ func (e *Executor) startRegistryWithRetryLimit() {
 
 // Registry with result checking
 func (e *Executor) registryWithResult() bool {
-	registryParam := models.RegistryParam{
+	registryParam := RegistryParam{
 		RegistryGroup: "EXECUTOR",
 		RegistryKey:   e.config.XXLJob.AppName,
 		RegistryValue: fmt.Sprintf("http://%s:%d", e.config.Executor.IP, e.config.Executor.Port),
@@ -119,7 +118,7 @@ func (e *Executor) startHeartbeatWithRetryLimit() {
 
 // Heartbeat with result checking
 func (e *Executor) heartbeatWithResult() bool {
-	registryParam := models.RegistryParam{
+	registryParam := RegistryParam{
 		RegistryGroup: "EXECUTOR",
 		RegistryKey:   e.config.XXLJob.AppName,
 		RegistryValue: fmt.Sprintf("http://%s:%d", e.config.Executor.IP, e.config.Executor.Port),
@@ -153,20 +152,20 @@ func (e *Executor) startPeriodicHeartbeat() {
 }
 
 // ExecuteJob Execute job
-func (e *Executor) ExecuteJob(param *models.TriggerParam) *models.ReturnT {
+func (e *Executor) ExecuteJob(param *TriggerParam) *ReturnT {
 	e.mutex.RLock()
 	handler, exists := e.handlers[param.ExecutorHandler]
 	e.mutex.RUnlock()
 
 	if !exists {
-		return &models.ReturnT{
+		return &ReturnT{
 			Code: 500,
 			Msg:  fmt.Sprintf("Job handler not found: %s", param.ExecutorHandler),
 		}
 	}
 
 	// Create job context
-	jobCtx := &models.JobContext{
+	jobCtx := &JobContext{
 		JobID:          param.JobID,
 		JobParam:       param.ExecutorParams,
 		LogID:          param.LogID,
@@ -194,33 +193,33 @@ func (e *Executor) ExecuteJob(param *models.TriggerParam) *models.ReturnT {
 		}
 	}()
 
-	return &models.ReturnT{
+	return &ReturnT{
 		Code: 200,
 		Msg:  "success",
 	}
 }
 
 // IdleBeat checks if executor is idle
-func (e *Executor) IdleBeat(param *models.IdleBeatParam) *models.ReturnT {
+func (e *Executor) IdleBeat(param *IdleBeatParam) *ReturnT {
 	e.mutex.RLock()
 	_, running := e.runningJobs[param.JobID]
 	e.mutex.RUnlock()
 
 	if running {
-		return &models.ReturnT{
+		return &ReturnT{
 			Code: 500,
 			Msg:  "job is running",
 		}
 	}
 
-	return &models.ReturnT{
+	return &ReturnT{
 		Code: 200,
 		Msg:  "success",
 	}
 }
 
 // Kill job
-func (e *Executor) Kill(param *models.KillParam) *models.ReturnT {
+func (e *Executor) Kill(param *KillParam) *ReturnT {
 	e.mutex.Lock()
 	cancelFunc, exists := e.runningJobs[param.JobID]
 	if exists {
@@ -229,23 +228,23 @@ func (e *Executor) Kill(param *models.KillParam) *models.ReturnT {
 	}
 	e.mutex.Unlock()
 
-	return &models.ReturnT{
+	return &ReturnT{
 		Code: 200,
 		Msg:  "success",
 	}
 }
 
 // Log query
-func (e *Executor) Log(param *models.LogParam) *models.ReturnT {
+func (e *Executor) Log(param *LogParam) *ReturnT {
 	// TODO: Implement log reading logic
-	result := &models.LogResult{
+	result := &LogResult{
 		FromLineNum: param.FromLineNum,
 		ToLineNum:   param.FromLineNum,
 		LogContent:  "",
 		IsEnd:       true,
 	}
 
-	return &models.ReturnT{
+	return &ReturnT{
 		Code:    200,
 		Msg:     "success",
 		Content: result,

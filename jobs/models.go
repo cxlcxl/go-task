@@ -1,5 +1,7 @@
 package jobs
 
+import "task-executor/database"
+
 const (
 	// TaskTypeDefault 任务类型，default 执行器方法，http 发送 http 请求
 	TaskTypeDefault = "default"
@@ -15,3 +17,5 @@ type TaskTypeHttpParam struct {
 	Timeout int               `json:"timeout"`
 	Retries int               `json:"retries"`
 }
+
+type TaskHandler func(*database.Database, *database.TaskData, database.QueueTable) func()

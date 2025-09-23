@@ -81,12 +81,13 @@ func (d *Database) SetTaskFinish(queueTable *QueueTable, id int64) (err error) {
 	return
 }
 
-func (d *Database) SetTaskFail(queueTable *QueueTable, id int64) (err error) {
+func (d *Database) SetTaskFail(queueTable *QueueTable, id int64, failMsg datatypes.JSON) (err error) {
 	c, _ := d.GetConnect(queueTable)
 	err = c.Table(queueTable.TableName).Where("id = ?", id).
 		Updates(map[string]interface{}{
-			"state":    TaskStatusFail,
-			"end_time": time.Now(),
+			"state":       TaskStatusFail,
+			"end_time":    time.Now(),
+			"exec_result": failMsg,
 		}).Error
 
 	return

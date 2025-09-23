@@ -1,17 +1,18 @@
 package define
 
 import (
+	"task-executor/executor"
+	"task-executor/jobs"
 	"task-executor/jobs/task"
 	"task-executor/jobs/xxljob"
-	"task-executor/models"
 )
 
 var (
-	TaskHandles = map[string]models.TaskHandler{
+	TaskHandles = map[string]jobs.TaskHandler{
 		"email_send":        task.EmailSenderTask,
 		"advertiser_report": task.AdvertiserReportTask,
 	}
-	XXLJobHandlers = map[string]models.JobHandler{
+	XXLJobHandlers = map[string]executor.JobHandler{
 		"email_send": xxljob.NewEmailJobHandler(),
 	}
 )

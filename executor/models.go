@@ -1,7 +1,6 @@
-package models
+package executor
 
 import (
-	"task-executor/database"
 	"time"
 )
 
@@ -16,7 +15,7 @@ type TriggerParam struct {
 	LogDateTime           int64  `json:"logDateTime"`
 	GlueType              string `json:"glueType"`
 	GlueSource            string `json:"glueSource"`
-	GlueUpdatetime        int64  `json:"glueUpdatetime"`
+	GlueUpdateTime        int64  `json:"glueUpdatetime"`
 	BroadcastIndex        int    `json:"broadcastIndex"`
 	BroadcastTotal        int    `json:"broadcastTotal"`
 }
@@ -76,5 +75,3 @@ type JobContext struct {
 type JobHandler interface {
 	Execute(ctx *JobContext) error
 }
-
-type TaskHandler func(*database.Database, *database.TaskData, database.QueueTable) func()

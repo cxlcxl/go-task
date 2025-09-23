@@ -71,6 +71,8 @@ func (rm *Manager) NewQueue(queueConfig database.QueueConfig, attempt int) {
 	rm.pools.Store(queueConfig.QueueName, pool)
 	logger.Info(fmt.Sprintf("协程池启动成功，队列名称: %s", queueConfig.QueueName))
 
+	// TODO 是否需要修复机器重启而异常的任务?
+
 	queueTable := rm.db.ParseTableName(queueConfig.TaskTable)
 	for {
 		freeWorkers := pool.Free()
@@ -90,13 +92,12 @@ func (rm *Manager) NewQueue(queueConfig database.QueueConfig, attempt int) {
 			if err != nil {
 				logger.Error(fmt.Sprintf("任务处理失败，错误信息: %s", err.Error()))
 			}
-			logger.Info(fmt.Sprintf("任务处理成功: %d", task.ID))
 		}
 	}
 }
 
 func (rm *Manager) watchQueueConfigs() {
-	rm.ListenQueue()
+	rm.listenQueue()
 
 	go rm.RemoveDisabledQueue()
 
@@ -104,12 +105,12 @@ func (rm *Manager) watchQueueConfigs() {
 	for {
 		select {
 		case <-ticker.C:
-			rm.ListenQueue()
+			rm.listenQueue()
 		}
 	}
 }
 
-func (rm *Manager) ListenQueue() {
+func (rm *Manager) listenQueue() {
 	configs, err := rm.db.GetQueueConfigs(rm.serverID)
 	if err != nil {
 		logger.Error(fmt.Sprintf("队列配置获取失败，错误信息: %s", err.Error()))
