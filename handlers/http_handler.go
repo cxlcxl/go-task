@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"task-executor/define"
 
 	"task-executor/executor"
 	"task-executor/logger"
@@ -20,7 +21,7 @@ func NewHTTPHandler(exec *executor.Executor) *HTTPHandler {
 
 // Beat handles heartbeat requests
 func (h *HTTPHandler) Beat(w http.ResponseWriter, r *http.Request) {
-	result := &executor.ReturnT{
+	result := &define.ReturnT{
 		Code: 200,
 		Msg:  "success",
 	}
@@ -29,7 +30,7 @@ func (h *HTTPHandler) Beat(w http.ResponseWriter, r *http.Request) {
 
 // IdleBeat handles idle beat requests
 func (h *HTTPHandler) IdleBeat(w http.ResponseWriter, r *http.Request) {
-	var param executor.IdleBeatParam
+	var param define.IdleBeatParam
 	if err := h.readJSON(r, &param); err != nil {
 		h.writeErrorJSON(w, "Invalid request body")
 		return
@@ -41,7 +42,7 @@ func (h *HTTPHandler) IdleBeat(w http.ResponseWriter, r *http.Request) {
 
 // Run handles job execution requests
 func (h *HTTPHandler) Run(w http.ResponseWriter, r *http.Request) {
-	var param executor.TriggerParam
+	var param define.TriggerParam
 	if err := h.readJSON(r, &param); err != nil {
 		h.writeErrorJSON(w, "Invalid request body")
 		return
@@ -54,7 +55,7 @@ func (h *HTTPHandler) Run(w http.ResponseWriter, r *http.Request) {
 
 // Kill handles job termination requests
 func (h *HTTPHandler) Kill(w http.ResponseWriter, r *http.Request) {
-	var param executor.KillParam
+	var param define.KillParam
 	if err := h.readJSON(r, &param); err != nil {
 		h.writeErrorJSON(w, "Invalid request body")
 		return
@@ -67,7 +68,7 @@ func (h *HTTPHandler) Kill(w http.ResponseWriter, r *http.Request) {
 
 // Log handles log query requests
 func (h *HTTPHandler) Log(w http.ResponseWriter, r *http.Request) {
-	var param executor.LogParam
+	var param define.LogParam
 	if err := h.readJSON(r, &param); err != nil {
 		h.writeErrorJSON(w, "Invalid request body")
 		return
@@ -88,7 +89,7 @@ func (h *HTTPHandler) writeJSON(w http.ResponseWriter, v interface{}) {
 }
 
 func (h *HTTPHandler) writeErrorJSON(w http.ResponseWriter, message string) {
-	result := &executor.ReturnT{
+	result := &define.ReturnT{
 		Code: 500,
 		Msg:  message,
 	}

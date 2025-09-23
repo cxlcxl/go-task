@@ -8,7 +8,6 @@ import (
 	"sync"
 	"task-executor/config"
 	"task-executor/database"
-	"task-executor/define"
 	"task-executor/logger"
 	"time"
 )
@@ -51,7 +50,7 @@ func (rm *Manager) Start() error {
 }
 
 func (rm *Manager) NewQueue(queueConfig database.QueueConfig, attempt int) {
-	handler, exists := define.TaskHandles[queueConfig.QueueName]
+	handler, exists := TaskHandles[queueConfig.QueueName]
 	if !exists {
 		logger.Error(fmt.Sprintf("任务处理器未注册: %s", queueConfig.QueueName))
 		return

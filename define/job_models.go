@@ -1,4 +1,4 @@
-package jobs
+package define
 
 import "task-executor/database"
 

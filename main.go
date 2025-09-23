@@ -88,17 +88,6 @@ func main() {
 	waitForShutdown(manager, db)
 }
 
-func registerRiverTaskHandlers(riverManager *jobs.RiverManager) {
-	// 注册队列任务处理器到River
-	riverManager.RegisterTaskHandler("email", jobs.NewEmailTaskHandler())
-	riverManager.RegisterTaskHandler("data_sync", jobs.NewDataSyncTaskHandler())
-	riverManager.RegisterTaskHandler("file_process", jobs.NewFileProcessTaskHandler())
-	riverManager.RegisterTaskHandler("report_generate", jobs.NewReportGenerateTaskHandler())
-	riverManager.RegisterTaskHandler("notification", jobs.NewNotificationTaskHandler())
-
-	logger.Info("所有River任务处理器注册成功")
-}
-
 func setupHTTPRoutes(handler *handlers.HTTPHandler) {
 	http.HandleFunc("/beat", handler.Beat)
 	http.HandleFunc("/idleBeat", handler.IdleBeat)

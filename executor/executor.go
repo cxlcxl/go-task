@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sync"
 	"task-executor/define"
+	"task-executor/jobs"
 	"time"
 
 	"task-executor/config"
@@ -16,7 +17,7 @@ import (
 
 type Executor struct {
 	config      *config.Config
-	handlers    map[string]JobHandler
+	handlers    map[string]define.JobHandler
 	runningJobs map[int]context.CancelFunc
 	mutex       sync.RWMutex
 }
@@ -24,14 +25,14 @@ type Executor struct {
 func NewExecutor(cfg *config.Config) *Executor {
 	return &Executor{
 		config:      cfg,
-		handlers:    make(map[string]JobHandler),
+		handlers:    make(map[string]define.JobHandler),
 		runningJobs: make(map[int]context.CancelFunc),
 	}
 }
 
 func RegisterXXLJobHandlers(exec *Executor) {
 	// 注册各种任务处理器
-	for queueName, handler := range define.XXLJobHandlers {
+	for queueName, handler := range jobs.XXLJobHandlers {
 		exec.RegisterJobHandler(queueName, handler)
 	}
 
@@ -39,7 +40,7 @@ func RegisterXXLJobHandlers(exec *Executor) {
 }
 
 // RegisterJobHandler registers a job handler
-func (e *Executor) RegisterJobHandler(name string, handler JobHandler) {
+func (e *Executor) RegisterJobHandler(name string, handler define.JobHandler) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 	e.handlers[name] = handler
@@ -69,7 +70,7 @@ func (e *Executor) startRegistryWithRetryLimit() {
 
 // Registry with result checking
 func (e *Executor) registryWithResult() bool {
-	registryParam := RegistryParam{
+	registryParam := define.RegistryParam{
 		RegistryGroup: "EXECUTOR",
 		RegistryKey:   e.config.XXLJob.AppName,
 		RegistryValue: fmt.Sprintf("http://%s:%d", e.config.Executor.IP, e.config.Executor.Port),
@@ -118,7 +119,7 @@ func (e *Executor) startHeartbeatWithRetryLimit() {
 
 // Heartbeat with result checking
 func (e *Executor) heartbeatWithResult() bool {
-	registryParam := RegistryParam{
+	registryParam := define.RegistryParam{
 		RegistryGroup: "EXECUTOR",
 		RegistryKey:   e.config.XXLJob.AppName,
 		RegistryValue: fmt.Sprintf("http://%s:%d", e.config.Executor.IP, e.config.Executor.Port),
@@ -152,20 +153,20 @@ func (e *Executor) startPeriodicHeartbeat() {
 }
 
 // ExecuteJob Execute job
-func (e *Executor) ExecuteJob(param *TriggerParam) *ReturnT {
+func (e *Executor) ExecuteJob(param *define.TriggerParam) *define.ReturnT {
 	e.mutex.RLock()
 	handler, exists := e.handlers[param.ExecutorHandler]
 	e.mutex.RUnlock()
 
 	if !exists {
-		return &ReturnT{
+		return &define.ReturnT{
 			Code: 500,
 			Msg:  fmt.Sprintf("Job handler not found: %s", param.ExecutorHandler),
 		}
 	}
 
 	// Create job context
-	jobCtx := &JobContext{
+	jobCtx := &define.JobContext{
 		JobID:          param.JobID,
 		JobParam:       param.ExecutorParams,
 		LogID:          param.LogID,
@@ -193,33 +194,33 @@ func (e *Executor) ExecuteJob(param *TriggerParam) *ReturnT {
 		}
 	}()
 
-	return &ReturnT{
+	return &define.ReturnT{
 		Code: 200,
 		Msg:  "success",
 	}
 }
 
 // IdleBeat checks if executor is idle
-func (e *Executor) IdleBeat(param *IdleBeatParam) *ReturnT {
+func (e *Executor) IdleBeat(param *define.IdleBeatParam) *define.ReturnT {
 	e.mutex.RLock()
 	_, running := e.runningJobs[param.JobID]
 	e.mutex.RUnlock()
 
 	if running {
-		return &ReturnT{
+		return &define.ReturnT{
 			Code: 500,
 			Msg:  "job is running",
 		}
 	}
 
-	return &ReturnT{
+	return &define.ReturnT{
 		Code: 200,
 		Msg:  "success",
 	}
 }
 
 // Kill job
-func (e *Executor) Kill(param *KillParam) *ReturnT {
+func (e *Executor) Kill(param *define.KillParam) *define.ReturnT {
 	e.mutex.Lock()
 	cancelFunc, exists := e.runningJobs[param.JobID]
 	if exists {
@@ -228,23 +229,23 @@ func (e *Executor) Kill(param *KillParam) *ReturnT {
 	}
 	e.mutex.Unlock()
 
-	return &ReturnT{
+	return &define.ReturnT{
 		Code: 200,
 		Msg:  "success",
 	}
 }
 
 // Log query
-func (e *Executor) Log(param *LogParam) *ReturnT {
+func (e *Executor) Log(param *define.LogParam) *define.ReturnT {
 	// TODO: Implement log reading logic
-	result := &LogResult{
+	result := &define.LogResult{
 		FromLineNum: param.FromLineNum,
 		ToLineNum:   param.FromLineNum,
 		LogContent:  "",
 		IsEnd:       true,
 	}
 
-	return &ReturnT{
+	return &define.ReturnT{
 		Code:    200,
 		Msg:     "success",
 		Content: result,
